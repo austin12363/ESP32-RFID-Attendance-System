@@ -1,6 +1,5 @@
 package com.slsu.attendance.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,14 +11,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.slsu.attendance.data.model.AttendanceRecord
-import com.slsu.attendance.ui.theme.MdExitOrange
-import com.slsu.attendance.ui.theme.MdPrimaryLight
 import com.slsu.attendance.viewmodel.AttendanceViewModel
 import com.slsu.attendance.viewmodel.UiState
 
@@ -27,10 +23,11 @@ import com.slsu.attendance.viewmodel.UiState
 @Composable
 fun RosterScreen(viewModel: AttendanceViewModel, uiState: UiState) {
     var searchQuery by remember { mutableStateOf("") }
-    var filterType by remember { mutableStateOf("All") } // "All", "In", "Out"
+    var filterType by remember { mutableStateOf("All") }
     var showManualDialog by remember { mutableStateOf(false) }
 
     val rawList = uiState.attendanceList
+    val primaryColor = MaterialTheme.colorScheme.primary
 
     val filteredRecords = remember(rawList, searchQuery, filterType) {
         rawList.filter { rec ->
@@ -50,34 +47,15 @@ fun RosterScreen(viewModel: AttendanceViewModel, uiState: UiState) {
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Live Attendance Roster", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        Text(
-                            "${rawList.size} Attendees Logged",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                actions = {
-                    if (rawList.isNotEmpty()) {
-                        IconButton(onClick = { viewModel.clearSessionRoster() }) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = "Clear", tint = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-            )
-        },
+        containerColor = MaterialTheme.colorScheme.background,
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showManualDialog = true },
                 icon = { Icon(Icons.Default.PersonAdd, contentDescription = null) },
-                text = { Text("Manual Entry") },
-                containerColor = MdPrimaryLight,
-                contentColor = Color.White
+                text = { Text("Manual Entry", fontWeight = FontWeight.Bold) },
+                containerColor = primaryColor,
+                contentColor = Color.White,
+                shape = RoundedCornerShape(20.dp)
             )
         }
     ) { paddingValues ->
@@ -85,14 +63,43 @@ fun RosterScreen(viewModel: AttendanceViewModel, uiState: UiState) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Search Box
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "LIVE ROSTER",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.2.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Attendees (${rawList.size})",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+
+                if (rawList.isNotEmpty()) {
+                    IconButton(onClick = { viewModel.clearSessionRoster() }) {
+                        Icon(Icons.Default.DeleteSweep, contentDescription = "Clear", tint = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            // Material You Search Pill (Full Capsule)
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                placeholder = { Text("Search name, student ID, or UID...") },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search by name, student ID, or UID...") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -101,41 +108,56 @@ fun RosterScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                         }
                     }
                 },
-                shape = RoundedCornerShape(16.dp),
-                singleLine = true
+                shape = CircleShape,
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
             )
 
-            // Filter Chips Row (All / Checked In / Checked Out)
+            // Filter Pills Row
             Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 FilterChip(
                     selected = filterType == "All",
                     onClick = { filterType = "All" },
-                    label = { Text("All (${rawList.size})") }
+                    label = { Text("All (${rawList.size})", fontWeight = FontWeight.Bold) },
+                    shape = CircleShape
                 )
                 FilterChip(
                     selected = filterType == "In",
                     onClick = { filterType = "In" },
-                    label = { Text("Checked In") }
+                    label = { Text("Checked In", fontWeight = FontWeight.Bold) },
+                    shape = CircleShape
                 )
                 FilterChip(
                     selected = filterType == "Out",
                     onClick = { filterType = "Out" },
-                    label = { Text("Checked Out") }
+                    label = { Text("Checked Out", fontWeight = FontWeight.Bold) },
+                    shape = CircleShape
                 )
             }
 
-            // Attendee List
+            // List of Chunky Attendee Cards (24dp rounded)
             if (filteredRecords.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize().padding(bottom = 80.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.Groups, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(48.dp))
-                        Spacer(Modifier.height(8.dp))
+                        Surface(
+                            modifier = Modifier.size(64.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Groups, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(32.dp))
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
                         Text(
                             text = if (rawList.isEmpty()) "No attendees checked in yet.\nTap an RFID card or add manually." else "No records match your filter.",
                             color = Color.Gray,
@@ -147,11 +169,11 @@ fun RosterScreen(viewModel: AttendanceViewModel, uiState: UiState) {
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(bottom = 80.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 90.dp)
                 ) {
                     items(filteredRecords, key = { it.uid ?: it.studentId ?: it.index.toString() }) { record ->
-                        RosterAttendeeCard(
+                        ChunkyAttendeeCard(
                             record = record,
                             onDelete = { record.uid?.let { viewModel.deleteAttendee(it) } }
                         )
@@ -168,7 +190,7 @@ fun RosterScreen(viewModel: AttendanceViewModel, uiState: UiState) {
 
         AlertDialog(
             onDismissRequest = { showManualDialog = false },
-            title = { Text("Manual Check-In", fontWeight = FontWeight.Bold) },
+            title = { Text("Manual Check-In", fontWeight = FontWeight.Black) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Manually log an attendee who doesn't have their card.", fontSize = 12.sp, color = Color.Gray)
@@ -176,33 +198,22 @@ fun RosterScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                         value = name,
                         onValueChange = { name = it },
                         label = { Text("Full Name *") },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp)
                     )
                     OutlinedTextField(
                         value = studentId,
                         onValueChange = { studentId = it },
                         label = { Text("Student / Employee ID") },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp)
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = type == "Entrance",
-                            onClick = { type = "Entrance" },
-                            label = { Text("Entrance") },
-                            modifier = Modifier.weight(1f)
-                        )
-                        FilterChip(
-                            selected = type == "Exit",
-                            onClick = { type = "Exit" },
-                            label = { Text("Exit") },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
                 }
             },
             confirmButton = {
                 Button(
                     enabled = name.isNotBlank(),
+                    shape = CircleShape,
                     onClick = {
                         viewModel.recordManualAttendance(name, studentId, type)
                         showManualDialog = false
@@ -221,32 +232,41 @@ fun RosterScreen(viewModel: AttendanceViewModel, uiState: UiState) {
 }
 
 @Composable
-fun RosterAttendeeCard(record: AttendanceRecord, onDelete: () -> Unit) {
+fun ChunkyAttendeeCard(record: AttendanceRecord, onDelete: () -> Unit) {
     val isCompleted = !record.timeOut.isNullOrBlank() && record.timeOut != "--"
+    val primaryColor = MaterialTheme.colorScheme.primary
 
-    Card(
+    // Generate Initials
+    val initials = remember(record.name) {
+        val parts = (record.name ?: "A").trim().split(" ")
+        if (parts.size >= 2) "${parts[0].firstOrNull() ?: ' '}${parts[1].firstOrNull() ?: ' '}".uppercase()
+        else (record.name ?: "A").take(2).uppercase()
+    }
+
+    ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Index Pill
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface),
-                contentAlignment = Alignment.Center
+            // Chunky Avatar with Initials
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = if (isCompleted) Color(0xFF8B5CF6).copy(alpha = 0.2f) else primaryColor.copy(alpha = 0.2f)
             ) {
-                Text(
-                    text = "${record.index ?: "#"}",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = initials,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 14.sp,
+                        color = if (isCompleted) Color(0xFF8B5CF6) else primaryColor
+                    )
+                }
             }
 
             Spacer(Modifier.width(12.dp))
@@ -255,11 +275,11 @@ fun RosterAttendeeCard(record: AttendanceRecord, onDelete: () -> Unit) {
                 Text(
                     text = record.name?.ifBlank { "Unregistered Attendee" } ?: "Attendee",
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                    fontSize = 14.sp
                 )
                 Text(
                     text = "ID: ${record.studentId?.ifBlank { "--" }} • UID: ${record.uid ?: "--"}",
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(
@@ -269,28 +289,28 @@ fun RosterAttendeeCard(record: AttendanceRecord, onDelete: () -> Unit) {
                     Text(
                         text = "In: ${record.timeIn ?: "--"}",
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MdPrimaryLight
+                        fontWeight = FontWeight.Bold,
+                        color = primaryColor
                     )
                     if (isCompleted) {
                         Text(
                             text = "Out: ${record.timeOut ?: "--"}",
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MdExitOrange
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.secondary
                         )
                     }
                 }
             }
 
-            // Status Badge
+            // Bubbly Status Badge
             Surface(
                 shape = CircleShape,
                 color = if (isCompleted) Color(0xFFF3E8FF) else Color(0xFFD1FAE5)
             ) {
                 Text(
-                    text = if (isCompleted) "COMPLETED" else "IN",
-                    fontWeight = FontWeight.ExtraBold,
+                    text = if (isCompleted) "DONE" else "IN",
+                    fontWeight = FontWeight.Black,
                     fontSize = 10.sp,
                     color = if (isCompleted) Color(0xFF7E22CE) else Color(0xFF047857),
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)

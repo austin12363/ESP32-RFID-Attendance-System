@@ -20,8 +20,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.slsu.attendance.ui.theme.MdExitOrange
-import com.slsu.attendance.ui.theme.MdPrimaryLight
 import com.slsu.attendance.viewmodel.AttendanceViewModel
 import com.slsu.attendance.viewmodel.UiState
 
@@ -35,156 +33,207 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
     val isExitMode = status?.sessionType.equals("Exit", ignoreCase = true)
     val lastScan = status?.lastScan
 
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val secondaryColor = MaterialTheme.colorScheme.secondary
+
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .clip(CircleShape)
-                                .background(if (uiState.isConnected) Color(0xFF10B981) else Color(0xFFEF4444))
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text("ESP32 Attendance Terminal", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Text(
-                                text = if (uiState.isConnected) "192.168.4.1 • Hotspot Connected" else "Searching for ESP32-Attendance...",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.refreshAll() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                }
-            )
-        }
+        containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
 
-            // 1. Webapp Signature Mode Segmented Control Pill
-            Box(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), CircleShape)
-                    .padding(4.dp)
+            // 1. Material You Greeting & Status Pills (Matching Reference Image 2)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "ESP32 TERMINAL",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 1.2.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "Attendance Hub",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    // Online Status Capsule
+                    Surface(
+                        shape = CircleShape,
+                        color = if (uiState.isConnected) Color(0xFF10B981).copy(alpha = 0.18f) else Color(0xFFEF4444).copy(alpha = 0.18f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (uiState.isConnected) Color(0xFF10B981).copy(alpha = 0.4f) else Color(0xFFEF4444).copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(if (uiState.isConnected) Color(0xFF10B981) else Color(0xFFEF4444))
+                            )
+                            Text(
+                                text = if (uiState.isConnected) "Ready" else "Offline",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Black,
+                                color = if (uiState.isConnected) Color(0xFF10B981) else Color(0xFFEF4444)
+                            )
+                        }
+                    }
+                }
+
+                // Weather-Style Status Pills Row (Image 2)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    StatusPillTag(
+                        text = "${status?.attendanceCount ?: uiState.attendanceList.size} Present",
+                        containerColor = primaryColor.copy(alpha = 0.15f),
+                        contentColor = primaryColor
+                    )
+                    StatusPillTag(
+                        text = "${status?.registeredCount ?: 0} Cards",
+                        containerColor = Color(0xFF10B981).copy(alpha = 0.15f),
+                        contentColor = Color(0xFF10B981)
+                    )
+                    StatusPillTag(
+                        text = if (isSessionActive) (status?.sessionTitle ?: "Active") else "Idle",
+                        containerColor = Color(0xFFF59E0B).copy(alpha = 0.15f),
+                        contentColor = Color(0xFFF59E0B)
+                    )
+                }
+            }
+
+            // 2. Chunky Segmented Capsule Switcher (TIME IN / TIME OUT)
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // TIME IN Button
+                Row(
+                    modifier = Modifier.padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Button(
                         onClick = { if (isExitMode) viewModel.toggleMode() },
+                        modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (!isExitMode) MdPrimaryLight else Color.Transparent,
+                            containerColor = if (!isExitMode) primaryColor else Color.Transparent,
                             contentColor = if (!isExitMode) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                         ),
                         shape = CircleShape,
                         elevation = if (!isExitMode) ButtonDefaults.buttonElevation(defaultElevation = 2.dp) else null,
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp)
+                        contentPadding = PaddingValues(vertical = 10.dp)
                     ) {
-                        Text("TIME IN", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Icon(Icons.Default.Login, contentDescription = null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("TIME IN", fontWeight = FontWeight.Black, fontSize = 12.sp)
                     }
 
-                    Spacer(Modifier.width(4.dp))
-
-                    // TIME OUT Button
                     Button(
                         onClick = { if (!isExitMode) viewModel.toggleMode() },
+                        modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isExitMode) MdExitOrange else Color.Transparent,
+                            containerColor = if (isExitMode) secondaryColor else Color.Transparent,
                             contentColor = if (isExitMode) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                         ),
                         shape = CircleShape,
                         elevation = if (isExitMode) ButtonDefaults.buttonElevation(defaultElevation = 2.dp) else null,
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp)
+                        contentPadding = PaddingValues(vertical = 10.dp)
                     ) {
-                        Text("TIME OUT", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Icon(Icons.Default.Logout, contentDescription = null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("TIME OUT", fontWeight = FontWeight.Black, fontSize = 12.sp)
                     }
                 }
             }
 
-            // 2. Hero Tap Sensor Card (With Animated Radar Rings)
-            Card(
+            // 3. Hero Tap Sensor Card (Chunky 32dp Rounded Corners)
+            ElevatedCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (lastScan?.isDuplicate == true) Color(0xFFF59E0B)
-                    else if (lastScan?.uid?.isNotBlank() == true) Color(0xFF10B981)
-                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                )
+                shape = RoundedCornerShape(32.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp)
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(20.dp),
+                        .padding(24.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    // When a card was recently scanned, show the animated scan result
                     val hasRecentScan = !lastScan?.uid.isNullOrBlank()
 
                     AnimatedContent(
                         targetState = hasRecentScan,
-                        label = "ScanStateAnimation"
+                        label = "SensorAnimation"
                     ) { isScanned ->
                         if (!isScanned) {
-                            // IDLE RADAR STATE
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center
                             ) {
-                                RadarSensorAnimation(isExitMode = isExitMode)
+                                MaterialYouRadarAnimation(isExitMode = isExitMode)
 
                                 Spacer(Modifier.height(18.dp))
 
                                 Surface(
                                     shape = CircleShape,
-                                    color = MaterialTheme.colorScheme.surface,
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                                    color = if (isExitMode) secondaryColor.copy(alpha = 0.16f) else primaryColor.copy(alpha = 0.16f),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (isExitMode) secondaryColor.copy(alpha = 0.35f) else primaryColor.copy(alpha = 0.35f)
+                                    )
                                 ) {
                                     Text(
                                         text = if (isExitMode) "EXIT SCAN ACTIVE" else "ENTRANCE SCAN ACTIVE",
-                                        fontWeight = FontWeight.ExtraBold,
+                                        fontWeight = FontWeight.Black,
                                         fontSize = 11.sp,
-                                        letterSpacing = 0.8.sp,
-                                        color = if (isExitMode) MdExitOrange else MdPrimaryLight,
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                                        letterSpacing = 1.sp,
+                                        color = if (isExitMode) secondaryColor else primaryColor,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp)
                                     )
                                 }
 
-                                Spacer(Modifier.height(10.dp))
+                                Spacer(Modifier.height(8.dp))
 
                                 Text(
-                                    text = "Ready for RFID Card",
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold,
+                                    text = "Tap RFID Card",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Black,
                                     textAlign = TextAlign.Center
                                 )
 
                                 Text(
-                                    text = "Hold card near the ESP32 terminal",
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(top = 4.dp)
+                                    text = "Hold card near the terminal",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         } else {
-                            // SCANNED RESULT POP-IN
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center,
@@ -197,7 +246,7 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                                     color = if (isDup) Color(0xFFFEF3C7) else Color(0xFFD1FAE5)
                                 ) {
                                     Text(
-                                        text = if (isDup) "⚠️ ALREADY RECORDED" else "✓ RECORDED: ${lastScan?.type ?: "ATTENDANCE"}",
+                                        text = if (isDup) "⚠️ ALREADY LOGGED" else "✓ RECORDED: ${lastScan?.type ?: "ATTENDANCE"}",
                                         fontWeight = FontWeight.Black,
                                         fontSize = 12.sp,
                                         color = if (isDup) Color(0xFFB45309) else Color(0xFF047857),
@@ -209,16 +258,15 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
 
                                 Text(
                                     text = lastScan?.name?.ifBlank { "Unregistered Card" } ?: "Scan Event",
-                                    fontSize = 26.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    textAlign = TextAlign.Center,
-                                    lineHeight = 30.sp
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.Black,
+                                    textAlign = TextAlign.Center
                                 )
 
                                 Spacer(Modifier.height(6.dp))
 
                                 Text(
-                                    text = "UID: ${lastScan?.uid ?: "--"}",
+                                    text = "ID: ${lastScan?.uid ?: "--"}",
                                     fontSize = 13.sp,
                                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -236,67 +284,63 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                 }
             }
 
-            // 3. Clean 3-Pill Metrics Row
-            Row(
+            // 4. Chunky Active Session Card (24dp rounded)
+            Surface(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
-                MetricPill(
-                    label = "Attendees",
-                    value = "${status?.attendanceCount ?: uiState.attendanceList.size}",
-                    color = MdPrimaryLight,
-                    modifier = Modifier.weight(1f)
-                )
-                MetricPill(
-                    label = "Registered",
-                    value = "${status?.registeredCount ?: 0}",
-                    color = Color(0xFF10B981),
-                    modifier = Modifier.weight(1f)
-                )
-                MetricPill(
-                    label = "Session",
-                    value = if (isSessionActive) (status?.sessionTitle ?: "Active") else "Idle",
-                    color = if (isSessionActive) Color(0xFFF59E0B) else Color.Gray,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            // 4. Session Action Buttons (Start / Stop)
-            if (!isSessionActive) {
-                Button(
-                    onClick = { showStartDialog = true },
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MdPrimaryLight)
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Start Attendance Session", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                }
-            } else {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    modifier = Modifier.padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedButton(
-                        onClick = { viewModel.saveSessionToHistory() },
-                        modifier = Modifier.weight(1f).height(46.dp),
-                        shape = RoundedCornerShape(12.dp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Icon(Icons.Default.Save, contentDescription = null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Save History", fontSize = 12.sp)
+                        Surface(
+                            modifier = Modifier.size(42.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            color = primaryColor.copy(alpha = 0.16f)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Event, contentDescription = null, tint = primaryColor, modifier = Modifier.size(22.dp))
+                            }
+                        }
+                        Column {
+                            Text(
+                                text = if (isSessionActive) (status?.sessionTitle ?: "Active Session") else "No Session Active",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                text = "ESP32 Time: ${status?.currentTime ?: "--"}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
 
-                    Button(
-                        onClick = { viewModel.stopSession() },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                        modifier = Modifier.weight(1f).height(46.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Default.Stop, contentDescription = null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("End Session", fontSize = 12.sp)
+                    if (!isSessionActive) {
+                        Button(
+                            onClick = { showStartDialog = true },
+                            shape = CircleShape,
+                            colors = ButtonDefaults.buttonColors(containerColor = primaryColor),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Text("Start", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    } else {
+                        Button(
+                            onClick = { viewModel.stopSession() },
+                            shape = CircleShape,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Text("Stop", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
                     }
                 }
             }
@@ -309,7 +353,7 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
 
         AlertDialog(
             onDismissRequest = { showStartDialog = false },
-            title = { Text("Start Session", fontWeight = FontWeight.Bold) },
+            title = { Text("Start Session", fontWeight = FontWeight.Black) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
@@ -317,7 +361,8 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                         onValueChange = { title = it },
                         label = { Text("Session Name / Subject") },
                         placeholder = { Text("e.g. CS101 Finals") },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp)
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
@@ -353,82 +398,64 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
 }
 
 @Composable
-fun RadarSensorAnimation(isExitMode: Boolean) {
+fun StatusPillTag(text: String, containerColor: Color, contentColor: Color) {
+    Surface(
+        shape = CircleShape,
+        color = containerColor
+    ) {
+        Text(
+            text = text,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Black,
+            color = contentColor,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+        )
+    }
+}
+
+@Composable
+fun MaterialYouRadarAnimation(isExitMode: Boolean) {
     val infiniteTransition = rememberInfiniteTransition(label = "RadarTransition")
     val scale by infiniteTransition.animateFloat(
         initialValue = 0.85f,
-        targetValue = 1.25f,
+        targetValue = 1.35f,
         animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
+            animation = tween(2200, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "RadarScale"
     )
 
+    val color = if (isExitMode) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+
     Box(
-        modifier = Modifier.size(110.dp),
+        modifier = Modifier.size(120.dp),
         contentAlignment = Alignment.Center
     ) {
         // Outer pulsing ring
         Box(
             modifier = Modifier
-                .size(110.dp)
+                .size(120.dp)
                 .scale(scale)
                 .clip(CircleShape)
-                .background(
-                    if (isExitMode) MdExitOrange.copy(alpha = 0.12f)
-                    else MdPrimaryLight.copy(alpha = 0.12f)
-                )
+                .background(color.copy(alpha = 0.12f))
         )
 
-        // Center floating sensor circle
+        // Center floating rounded sensor icon (28dp shape)
         Surface(
-            modifier = Modifier.size(68.dp),
-            shape = CircleShape,
-            color = if (isExitMode) MdExitOrange.copy(alpha = 0.18f) else MdPrimaryLight.copy(alpha = 0.18f),
-            border = androidx.compose.foundation.BorderStroke(
-                1.5.dp,
-                if (isExitMode) MdExitOrange.copy(alpha = 0.4f) else MdPrimaryLight.copy(alpha = 0.4f)
-            )
+            modifier = Modifier.size(76.dp),
+            shape = RoundedCornerShape(26.dp),
+            color = color.copy(alpha = 0.22f),
+            border = androidx.compose.foundation.BorderStroke(2.dp, color.copy(alpha = 0.45f))
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     Icons.Default.Contactless,
                     contentDescription = null,
-                    tint = if (isExitMode) MdExitOrange else MdPrimaryLight,
-                    modifier = Modifier.size(34.dp)
+                    tint = color,
+                    modifier = Modifier.size(38.dp)
                 )
             }
-        }
-    }
-}
-
-@Composable
-fun MetricPill(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
-    ) {
-        Column(
-            modifier = Modifier.padding(vertical = 10.dp, horizontal = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = label.uppercase(),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = value,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = color,
-                maxLines = 1
-            )
         }
     }
 }
