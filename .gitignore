@@ -1,12 +1,6 @@
-# Android build artifacts
-.gradle/
+# Build directories
 build/
-android-app/.gradle/
-android-app/build/
-android-app/app/build/
-*.iml
-.idea/
-local.properties
+**/build/
 
 # Python
 __pycache__/
@@ -15,7 +9,3 @@ __pycache__/
 # OS
 Thumbs.db
 .DS_Store
-
-# APK artifacts & downloads
-release-apk/
-*.zip
