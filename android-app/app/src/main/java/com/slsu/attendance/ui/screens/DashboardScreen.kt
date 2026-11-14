@@ -1,9 +1,11 @@
 package com.slsu.attendance.ui.screens
 
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -12,44 +14,47 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.slsu.attendance.data.model.AttendanceRecord
+import com.slsu.attendance.ui.theme.MdExitOrange
+import com.slsu.attendance.ui.theme.MdPrimaryLight
 import com.slsu.attendance.viewmodel.AttendanceViewModel
 import com.slsu.attendance.viewmodel.UiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
-    var showStartSessionDialog by remember { mutableStateOf(false) }
-    var showManualEntryDialog by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
+    var showStartDialog by remember { mutableStateOf(false) }
 
     val status = uiState.status
     val isSessionActive = status?.sessionActive == true
-
-    val filteredRecords = remember(uiState.attendanceList, searchQuery) {
-        if (searchQuery.isBlank()) uiState.attendanceList
-        else uiState.attendanceList.filter {
-            (it.name ?: "").contains(searchQuery, ignoreCase = true) ||
-            (it.studentId ?: "").contains(searchQuery, ignoreCase = true) ||
-            (it.uid ?: "").contains(searchQuery, ignoreCase = true)
-        }
-    }
+    val isExitMode = status?.sessionType.equals("Exit", ignoreCase = true)
+    val lastScan = status?.lastScan
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text("ESP32 Attendance Terminal", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        Text(
-                            text = if (uiState.isConnected) "● Connected to ESP32 Hotspot" else "○ Disconnected (Connect to ESP32-Attendance)",
-                            color = if (uiState.isConnected) Color(0xFF10B981) else Color(0xFFEF4444),
-                            fontSize = 12.sp
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(if (uiState.isConnected) Color(0xFF10B981) else Color(0xFFEF4444))
                         )
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("ESP32 Attendance Terminal", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text(
+                                text = if (uiState.isConnected) "192.168.4.1 • Hotspot Connected" else "Searching for ESP32-Attendance...",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -58,343 +63,288 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                     }
                 }
             )
-        },
-        floatingActionButton = {
-            if (isSessionActive) {
-                FloatingActionButton(
-                    onClick = { showManualEntryDialog = true },
-                    containerColor = MaterialTheme.colorScheme.primary
-                ) {
-                    Icon(Icons.Default.PersonAdd, contentDescription = "Manual Entry")
-                }
-            }
         }
     ) { paddingValues ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            item {
-                Spacer(modifier = Modifier.height(2.dp))
-                // Active Session Overview Card
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isSessionActive) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = if (isSessionActive) "ACTIVE SESSION" else "NO SESSION ACTIVE",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isSessionActive) MaterialTheme.colorScheme.primary else Color.Gray
-                            )
 
-                            if (isSessionActive) {
-                                FilterChip(
-                                    selected = true,
-                                    onClick = { viewModel.toggleMode() },
-                                    label = { Text("Mode: ${status?.sessionType ?: "Entrance"}") },
-                                    leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null, Modifier.size(16.dp)) }
+            // 1. Webapp Signature Mode Segmented Control Pill
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), CircleShape)
+                    .padding(4.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // TIME IN Button
+                    Button(
+                        onClick = { if (isExitMode) viewModel.toggleMode() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (!isExitMode) MdPrimaryLight else Color.Transparent,
+                            contentColor = if (!isExitMode) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        shape = CircleShape,
+                        elevation = if (!isExitMode) ButtonDefaults.buttonElevation(defaultElevation = 2.dp) else null,
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp)
+                    ) {
+                        Text("TIME IN", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+
+                    Spacer(Modifier.width(4.dp))
+
+                    // TIME OUT Button
+                    Button(
+                        onClick = { if (!isExitMode) viewModel.toggleMode() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isExitMode) MdExitOrange else Color.Transparent,
+                            contentColor = if (isExitMode) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        shape = CircleShape,
+                        elevation = if (isExitMode) ButtonDefaults.buttonElevation(defaultElevation = 2.dp) else null,
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp)
+                    ) {
+                        Text("TIME OUT", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+
+            // 2. Hero Tap Sensor Card (With Animated Radar Rings)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (lastScan?.isDuplicate == true) Color(0xFFF59E0B)
+                    else if (lastScan?.uid?.isNotBlank() == true) Color(0xFF10B981)
+                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                )
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // When a card was recently scanned, show the animated scan result
+                    val hasRecentScan = !lastScan?.uid.isNullOrBlank()
+
+                    AnimatedContent(
+                        targetState = hasRecentScan,
+                        label = "ScanStateAnimation"
+                    ) { isScanned ->
+                        if (!isScanned) {
+                            // IDLE RADAR STATE
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                RadarSensorAnimation(isExitMode = isExitMode)
+
+                                Spacer(Modifier.height(18.dp))
+
+                                Surface(
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surface,
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                                ) {
+                                    Text(
+                                        text = if (isExitMode) "EXIT SCAN ACTIVE" else "ENTRANCE SCAN ACTIVE",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 11.sp,
+                                        letterSpacing = 0.8.sp,
+                                        color = if (isExitMode) MdExitOrange else MdPrimaryLight,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                                    )
+                                }
+
+                                Spacer(Modifier.height(10.dp))
+
+                                Text(
+                                    text = "Ready for RFID Card",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center
+                                )
+
+                                Text(
+                                    text = "Hold card near the ESP32 terminal",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 4.dp)
                                 )
                             }
-                        }
+                        } else {
+                            // SCANNED RESULT POP-IN
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val isDup = lastScan?.isDuplicate == true
 
-                        Text(
-                            text = if (isSessionActive) (status?.sessionTitle ?: "Active Class") else "Scanner is Idle",
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
-
-                        Text(
-                            text = "ESP32 Time: ${status?.currentTime ?: "--"}",
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            if (!isSessionActive) {
-                                Button(
-                                    onClick = { showStartSessionDialog = true },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
+                                Surface(
+                                    shape = CircleShape,
+                                    color = if (isDup) Color(0xFFFEF3C7) else Color(0xFFD1FAE5)
                                 ) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = null)
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Start Session")
-                                }
-                            } else {
-                                OutlinedButton(
-                                    onClick = { viewModel.saveSessionToHistory() },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Icon(Icons.Default.Save, contentDescription = null)
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Save History")
+                                    Text(
+                                        text = if (isDup) "⚠️ ALREADY RECORDED" else "✓ RECORDED: ${lastScan?.type ?: "ATTENDANCE"}",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 12.sp,
+                                        color = if (isDup) Color(0xFFB45309) else Color(0xFF047857),
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                                    )
                                 }
 
-                                Button(
-                                    onClick = { viewModel.stopSession() },
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Icon(Icons.Default.Stop, contentDescription = null)
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Stop")
-                                }
+                                Spacer(Modifier.height(14.dp))
+
+                                Text(
+                                    text = lastScan?.name?.ifBlank { "Unregistered Card" } ?: "Scan Event",
+                                    fontSize = 26.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    textAlign = TextAlign.Center,
+                                    lineHeight = 30.sp
+                                )
+
+                                Spacer(Modifier.height(6.dp))
+
+                                Text(
+                                    text = "UID: ${lastScan?.uid ?: "--"}",
+                                    fontSize = 13.sp,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Text(
+                                    text = "${lastScan?.time ?: "--"} • ${lastScan?.message ?: ""}",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
                             }
                         }
                     }
                 }
             }
 
-            // Real-Time Stats Row
-            item {
+            // 3. Clean 3-Pill Metrics Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                MetricPill(
+                    label = "Attendees",
+                    value = "${status?.attendanceCount ?: uiState.attendanceList.size}",
+                    color = MdPrimaryLight,
+                    modifier = Modifier.weight(1f)
+                )
+                MetricPill(
+                    label = "Registered",
+                    value = "${status?.registeredCount ?: 0}",
+                    color = Color(0xFF10B981),
+                    modifier = Modifier.weight(1f)
+                )
+                MetricPill(
+                    label = "Session",
+                    value = if (isSessionActive) (status?.sessionTitle ?: "Active") else "Idle",
+                    color = if (isSessionActive) Color(0xFFF59E0B) else Color.Gray,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // 4. Session Action Buttons (Start / Stop)
+            if (!isSessionActive) {
+                Button(
+                    onClick = { showStartDialog = true },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MdPrimaryLight)
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Start Attendance Session", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+            } else {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    StatBox(
-                        title = "Attendees",
-                        value = "${status?.attendanceCount ?: uiState.attendanceList.size}",
-                        icon = Icons.Default.Groups,
-                        modifier = Modifier.weight(1f)
-                    )
-                    StatBox(
-                        title = "Registered Cards",
-                        value = "${status?.registeredCount ?: 0}",
-                        icon = Icons.Default.CreditCard,
-                        modifier = Modifier.weight(1f)
-                    )
-                    StatBox(
-                        title = "Clients",
-                        value = "${status?.wifiClients ?: 1}",
-                        icon = Icons.Default.Wifi,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-
-            // Last Scan Banner
-            status?.lastScan?.let { last ->
-                if (!last.uid.isNullOrBlank()) {
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (last.isDuplicate == true) Color(0xFFFEF3C7) else Color(0xFFD1FAE5)
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(14.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = if (last.isDuplicate == true) Icons.Default.Warning else Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = if (last.isDuplicate == true) Color(0xFFD97706) else Color(0xFF059669),
-                                    modifier = Modifier.size(32.dp)
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column {
-                                    Text(
-                                        text = last.name?.ifBlank { "Unregistered Card (${last.uid})" } ?: "Scan Event",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 15.sp,
-                                        color = Color.Black
-                                    )
-                                    Text(
-                                        text = "${last.type ?: "Entrance"} at ${last.time ?: "--"} • ${last.message ?: ""}",
-                                        fontSize = 12.sp,
-                                        color = Color.DarkGray
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Search Bar & Roster Header
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Live Attendee Roster (${filteredRecords.size})",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    )
-                    if (isSessionActive && uiState.attendanceList.isNotEmpty()) {
-                        TextButton(onClick = { viewModel.clearSessionRoster() }) {
-                            Text("Clear Roster", color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    placeholder = { Text("Search by name, student ID, or card UID...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Close, contentDescription = null)
-                            }
-                        }
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    singleLine = true
-                )
-            }
-
-            // Attendance List
-            if (filteredRecords.isEmpty()) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 40.dp),
-                        contentAlignment = Alignment.Center
+                    OutlinedButton(
+                        onClick = { viewModel.saveSessionToHistory() },
+                        modifier = Modifier.weight(1f).height(46.dp),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text(
-                            text = if (isSessionActive) "No attendance scans recorded yet.\nTap an RFID card on the terminal." else "Start a session to begin logging attendance.",
-                            color = Color.Gray,
-                            fontSize = 14.sp,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
+                        Icon(Icons.Default.Save, contentDescription = null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Save History", fontSize = 12.sp)
+                    }
+
+                    Button(
+                        onClick = { viewModel.stopSession() },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.weight(1f).height(46.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("End Session", fontSize = 12.sp)
                     }
                 }
-            } else {
-                items(filteredRecords, key = { it.uid ?: it.studentId ?: it.index.toString() }) { record ->
-                    AttendeeRow(record = record, onDelete = { record.uid?.let { viewModel.deleteAttendee(it) } })
-                }
-            }
-
-            item {
-                Spacer(modifier = Modifier.height(70.dp))
             }
         }
     }
 
-    // Start Session Dialog
-    if (showStartSessionDialog) {
-        var sessionTitle by remember { mutableStateOf("") }
-        var sessionType by remember { mutableStateOf("Entrance") }
-        var clearPrevious by remember { mutableStateOf(true) }
+    if (showStartDialog) {
+        var title by remember { mutableStateOf("") }
+        var type by remember { mutableStateOf("Entrance") }
 
         AlertDialog(
-            onDismissRequest = { showStartSessionDialog = false },
-            title = { Text("Start Attendance Session") },
+            onDismissRequest = { showStartDialog = false },
+            title = { Text("Start Session", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
-                        value = sessionTitle,
-                        onValueChange = { sessionTitle = it },
+                        value = title,
+                        onValueChange = { title = it },
                         label = { Text("Session Name / Subject") },
-                        placeholder = { Text("e.g. CS101 Finals, Assembly") },
+                        placeholder = { Text("e.g. CS101 Finals") },
                         modifier = Modifier.fillMaxWidth()
                     )
-
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
-                            selected = sessionType == "Entrance",
-                            onClick = { sessionType = "Entrance" },
+                            selected = type == "Entrance",
+                            onClick = { type = "Entrance" },
                             label = { Text("Entrance") },
                             modifier = Modifier.weight(1f)
                         )
                         FilterChip(
-                            selected = sessionType == "Exit",
-                            onClick = { sessionType = "Exit" },
+                            selected = type == "Exit",
+                            onClick = { type = "Exit" },
                             label = { Text("Exit") },
                             modifier = Modifier.weight(1f)
                         )
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = clearPrevious, onCheckedChange = { clearPrevious = it })
-                        Text("Reset previous session records")
                     }
                 }
             },
             confirmButton = {
                 Button(onClick = {
-                    viewModel.startSession(sessionTitle, sessionType, clearPrevious)
-                    showStartSessionDialog = false
+                    viewModel.startSession(title, type, clearPrevious = true)
+                    showStartDialog = false
                 }) {
                     Text("Start")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showStartSessionDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-
-    // Manual Entry Dialog
-    if (showManualEntryDialog) {
-        var manualName by remember { mutableStateOf("") }
-        var manualId by remember { mutableStateOf("") }
-        var manualType by remember { mutableStateOf(status?.sessionType ?: "Entrance") }
-
-        AlertDialog(
-            onDismissRequest = { showManualEntryDialog = false },
-            title = { Text("Manual Attendance Entry") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Manually record an attendee who forgot their RFID card.", fontSize = 12.sp, color = Color.Gray)
-                    OutlinedTextField(
-                        value = manualName,
-                        onValueChange = { manualName = it },
-                        label = { Text("Full Name *") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = manualId,
-                        onValueChange = { manualId = it },
-                        label = { Text("Student / Employee ID") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    enabled = manualName.isNotBlank(),
-                    onClick = {
-                        viewModel.recordManualAttendance(manualName, manualId, manualType)
-                        showManualEntryDialog = false
-                    }
-                ) {
-                    Text("Record")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showManualEntryDialog = false }) {
+                TextButton(onClick = { showStartDialog = false }) {
                     Text("Cancel")
                 }
             }
@@ -403,69 +353,82 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
 }
 
 @Composable
-fun StatBox(title: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+fun RadarSensorAnimation(isExitMode: Boolean) {
+    val infiniteTransition = rememberInfiniteTransition(label = "RadarTransition")
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 0.85f,
+        targetValue = 1.25f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "RadarScale"
+    )
+
+    Box(
+        modifier = Modifier.size(110.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            horizontalAlignment = Alignment.Start
+        // Outer pulsing ring
+        Box(
+            modifier = Modifier
+                .size(110.dp)
+                .scale(scale)
+                .clip(CircleShape)
+                .background(
+                    if (isExitMode) MdExitOrange.copy(alpha = 0.12f)
+                    else MdPrimaryLight.copy(alpha = 0.12f)
+                )
+        )
+
+        // Center floating sensor circle
+        Surface(
+            modifier = Modifier.size(68.dp),
+            shape = CircleShape,
+            color = if (isExitMode) MdExitOrange.copy(alpha = 0.18f) else MdPrimaryLight.copy(alpha = 0.18f),
+            border = androidx.compose.foundation.BorderStroke(
+                1.5.dp,
+                if (isExitMode) MdExitOrange.copy(alpha = 0.4f) else MdPrimaryLight.copy(alpha = 0.4f)
+            )
         ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(text = value, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Text(text = title, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Default.Contactless,
+                    contentDescription = null,
+                    tint = if (isExitMode) MdExitOrange else MdPrimaryLight,
+                    modifier = Modifier.size(34.dp)
+                )
+            }
         }
     }
 }
 
 @Composable
-fun AttendeeRow(record: AttendanceRecord, onDelete: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+fun MetricPill(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.padding(vertical = 10.dp, horizontal = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "${record.index ?: "#"}",
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = record.name?.ifBlank { "Unregistered (${record.uid})" } ?: "Attendee",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp
-                )
-                Text(
-                    text = "ID: ${record.studentId?.ifBlank { "--" }} • In: ${record.timeIn ?: "--"} • Out: ${record.timeOut ?: "--"}",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = Color.Gray)
-            }
+            Text(
+                text = label.uppercase(),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = value,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = color,
+                maxLines = 1
+            )
         }
     }
 }

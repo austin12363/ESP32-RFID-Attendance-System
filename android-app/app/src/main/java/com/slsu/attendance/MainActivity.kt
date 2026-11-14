@@ -19,17 +19,17 @@ import androidx.navigation.compose.rememberNavController
 import com.slsu.attendance.data.network.NetworkClient
 import com.slsu.attendance.ui.screens.CardsScreen
 import com.slsu.attendance.ui.screens.DashboardScreen
-import com.slsu.attendance.ui.screens.HistoryScreen
+import com.slsu.attendance.ui.screens.RosterScreen
 import com.slsu.attendance.ui.screens.SettingsScreen
 import com.slsu.attendance.ui.theme.Esp32AttendanceTheme
 import com.slsu.attendance.viewmodel.AttendanceViewModel
 import kotlinx.coroutines.launch
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
-    object Dashboard : Screen("dashboard", "Dashboard", Icons.Default.Dashboard)
+    object Terminal : Screen("terminal", "Terminal", Icons.Default.Contactless)
+    object Roster : Screen("roster", "Roster", Icons.Default.FormatListNumbered)
     object Cards : Screen("cards", "Cards", Icons.Default.CreditCard)
-    object History : Screen("history", "History", Icons.Default.History)
-    object Settings : Screen("settings", "Settings", Icons.Default.Settings)
+    object Settings : Screen("settings", "Settings", Icons.Default.Tune)
 }
 
 class MainActivity : ComponentActivity() {
@@ -60,9 +60,9 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val items = listOf(
-                    Screen.Dashboard,
+                    Screen.Terminal,
+                    Screen.Roster,
                     Screen.Cards,
-                    Screen.History,
                     Screen.Settings
                 )
 
@@ -96,19 +96,19 @@ class MainActivity : ComponentActivity() {
                 ) { innerPadding ->
                     NavHost(
                         navController = navController,
-                        startDestination = Screen.Dashboard.route,
+                        startDestination = Screen.Terminal.route,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding)
                     ) {
-                        composable(Screen.Dashboard.route) {
+                        composable(Screen.Terminal.route) {
                             DashboardScreen(viewModel = viewModel, uiState = uiState)
+                        }
+                        composable(Screen.Roster.route) {
+                            RosterScreen(viewModel = viewModel, uiState = uiState)
                         }
                         composable(Screen.Cards.route) {
                             CardsScreen(viewModel = viewModel, uiState = uiState)
-                        }
-                        composable(Screen.History.route) {
-                            HistoryScreen(viewModel = viewModel, uiState = uiState)
                         }
                         composable(Screen.Settings.route) {
                             SettingsScreen(viewModel = viewModel, uiState = uiState)
