@@ -1,0 +1,17 @@
+# Android build artifacts
+.gradle/
+build/
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+*.iml
+.idea/
+local.properties
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+.DS_Store

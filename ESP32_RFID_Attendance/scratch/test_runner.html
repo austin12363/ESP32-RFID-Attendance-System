@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script>
+window.errors = [];
+window.onerror = function(msg, url, line, col, err) {
+  var errStr = "ERROR at line " + line + ", col " + col + ": " + msg;
+  window.errors.push(errStr);
+  console.error(errStr);
+  document.body.innerHTML += '<pre style="color:red">' + errStr + '</pre>';
+};
+</script>
+</head>
+<body>
+<h1>Testing JS</h1>
+<script src="extracted_script.js"></script>
+<script>
+console.log("Errors found: " + window.errors.length);
+if (window.errors.length === 0) {
+  document.body.innerHTML += '<pre style="color:green">NO ERRORS DETECTED</pre>';
+}
+</script>
+</body>
+</html>
