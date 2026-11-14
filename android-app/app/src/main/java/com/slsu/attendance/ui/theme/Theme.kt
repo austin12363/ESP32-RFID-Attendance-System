@@ -12,33 +12,49 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val DarkColorScheme = darkColorScheme(
-    primary = MdPrimaryDark,
-    secondary = MdExitOrange,
-    background = SurfaceDark,
-    surface = SurfaceContainerDark,
-    surfaceVariant = SurfaceContainerHighDark,
-    surfaceContainerLow = SurfaceContainerLowDark,
-    surfaceContainer = SurfaceContainerDark,
-    surfaceContainerHigh = SurfaceContainerHighDark,
-    error = MdError
+    primary = M3IndigoDark,
+    onPrimary = DarkBackground,
+    primaryContainer = Color(0xFF312E81),
+    onPrimaryContainer = Color(0xFFE0E7FF),
+    secondary = M3OrangeDark,
+    onSecondary = DarkBackground,
+    background = DarkBackground,
+    surface = DarkSurface,
+    surfaceVariant = DarkSurfaceContainer,
+    surfaceContainer = DarkSurfaceContainer,
+    surfaceContainerHigh = DarkSurfaceContainerHigh,
+    onBackground = DarkOnSurface,
+    onSurface = DarkOnSurface,
+    onSurfaceVariant = DarkOnSurfaceVariant,
+    outline = DarkOutline,
+    outlineVariant = DarkOutlineVariant,
+    error = M3Rose
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = MdPrimaryLight,
-    secondary = MdExitOrange,
-    background = SurfaceLight,
-    surface = SurfaceContainerLight,
-    surfaceVariant = SurfaceContainerHighLight,
-    surfaceContainerLow = SurfaceContainerLowLight,
-    surfaceContainer = SurfaceContainerLight,
-    surfaceContainerHigh = SurfaceContainerHighLight,
-    error = MdError
+    primary = M3IndigoLight,
+    onPrimary = androidx.compose.ui.graphics.Color.White,
+    primaryContainer = Color(0xFFE0E7FF),
+    onPrimaryContainer = Color(0xFF312E81),
+    secondary = M3OrangeLight,
+    onSecondary = androidx.compose.ui.graphics.Color.White,
+    background = LightBackground,
+    surface = LightSurface,
+    surfaceVariant = LightSurfaceContainer,
+    surfaceContainer = LightSurfaceContainer,
+    surfaceContainerHigh = LightSurfaceContainerHigh,
+    onBackground = LightOnSurface,
+    onSurface = LightOnSurface,
+    onSurfaceVariant = LightOnSurfaceVariant,
+    outline = LightOutline,
+    outlineVariant = LightOutlineVariant,
+    error = M3Rose
 )
 
 @Composable
 fun Esp32AttendanceTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = false, // Set false to preserve the ESP32 brand colors (Google Blue & Exit Orange)
+    dynamicColor: Boolean = true, // Enables Android 12+ wallpaper dynamic theming
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
