@@ -4921,55 +4921,6 @@ window.addEventListener('DOMContentLoaded', () => {
 // -----------------------------------------------------------------------------
 // Web Server Request Handlers
 // -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-// Universal Request Argument Extractor (Supports Query, Form URL-Encoded, and JSON Body)
-// -----------------------------------------------------------------------------
-bool hasRequestArg(const String& key) {
-  if (server.hasArg(key.c_str())) return true;
-  if (server.hasArg("plain")) {
-    String pattern = "\"" + key + "\"";
-    return (server.arg("plain").indexOf(pattern) != -1);
-  }
-  return false;
-}
-
-String getRequestArg(const String& key) {
-  if (server.hasArg(key.c_str())) {
-    return server.arg(key.c_str());
-  }
-  if (server.hasArg("plain")) {
-    String body = server.arg("plain");
-    String pattern = "\"" + key + "\"";
-    int idx = body.indexOf(pattern);
-    if (idx != -1) {
-      int colon = body.indexOf(':', idx + pattern.length());
-      if (colon != -1) {
-        int startVal = colon + 1;
-        while (startVal < body.length() && (body[startVal] == ' ' || body[startVal] == '\t' || body[startVal] == '\r' || body[startVal] == '\n')) {
-          startVal++;
-        }
-        if (startVal < body.length()) {
-          if (body[startVal] == '"') {
-            int endVal = body.indexOf('"', startVal + 1);
-            if (endVal != -1) {
-              return body.substring(startVal + 1, endVal);
-            }
-          } else {
-            int endVal = startVal;
-            while (endVal < body.length() && body[endVal] != ',' && body[endVal] != '}' && body[endVal] != ']' && body[endVal] != '\r' && body[endVal] != '\n') {
-              endVal++;
-            }
-            String val = body.substring(startVal, endVal);
-            val.trim();
-            return val;
-          }
-        }
-      }
-    }
-  }
-  return "";
-}
-
 void handleRoot() {
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.sendHeader("Pragma", "no-cache");
@@ -5055,11 +5006,11 @@ void handleStatus() {
 
 void handleSetTime() {
   wakeLcd();
-  if (hasRequestArg("epoch")) {
-    long epoch = getRequestArg("epoch").toInt();
+  if (server.hasArg("epoch")) {
+    long epoch = server.arg("epoch").toInt();
     long tz_offset = 0;
-    if (hasRequestArg("tz_offset")) {
-      tz_offset = getRequestArg("tz_offset").toInt(); // browser offset in minutes
+    if (server.hasArg("tz_offset")) {
+      tz_offset = server.arg("tz_offset").toInt(); // browser offset in minutes
     }
     time_t local_sec = epoch - (tz_offset * 60);
     struct timeval tv = { local_sec, 0 };
@@ -5078,17 +5029,17 @@ void handleStartSession() {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Please set system clock first before starting attendance session!\"}");
     return;
   }
-  if (hasRequestArg("clear_previous") && getRequestArg("clear_previous") == "1") {
+  if (server.hasArg("clear_previous") && server.arg("clear_previous") == "1") {
     attendanceRecords.clear();
   }
-  if (hasRequestArg("type")) {
-    String t = getRequestArg("type");
+  if (server.hasArg("type")) {
+    String t = server.arg("type");
     if (t == "Exit" || t == "Entrance") {
       sessionType = t;
     }
   }
-  if (hasRequestArg("title")) {
-    String st = getRequestArg("title");
+  if (server.hasArg("title")) {
+    String st = server.arg("title");
     st.trim();
     if (st.length() > 0) sessionTitle = st;
   }
@@ -5120,8 +5071,8 @@ void handleToggleMode() {
 void handleSetMode() {
   wakeLcd();
   String target = "";
-  if (hasRequestArg("mode")) target = getRequestArg("mode");
-  else if (hasRequestArg("type")) target = getRequestArg("type");
+  if (server.hasArg("mode")) target = server.arg("mode");
+  else if (server.hasArg("type")) target = server.arg("type");
 
   if (target.equalsIgnoreCase("Exit") || target.equalsIgnoreCase("OUT")) {
     sessionType = "Exit";
@@ -5142,30 +5093,30 @@ void handleClearSession() {
 }
 
 void handleSettings() {
-  if (hasRequestArg("require_registration")) {
-    requireRegistration = (getRequestArg("require_registration") == "1");
+  if (server.hasArg("require_registration")) {
+    requireRegistration = (server.arg("require_registration") == "1");
     Serial.printf("[SETTINGS] Require registration: %s\n", requireRegistration ? "ENABLED" : "DISABLED");
   }
-  if (hasRequestArg("lcd_timeout")) {
-    lcdStandbyTimeoutMs = (unsigned long)getRequestArg("lcd_timeout").toInt();
+  if (server.hasArg("lcd_timeout")) {
+    lcdStandbyTimeoutMs = (unsigned long)server.arg("lcd_timeout").toInt();
     Serial.printf("[SETTINGS] LCD Timeout set to: %lu ms\n", lcdStandbyTimeoutMs);
   }
-  if (hasRequestArg("lcd_wifi_guide")) {
-    showLcdWifiGuide = (getRequestArg("lcd_wifi_guide") == "1");
+  if (server.hasArg("lcd_wifi_guide")) {
+    showLcdWifiGuide = (server.arg("lcd_wifi_guide") == "1");
   }
-  if (hasRequestArg("card_debounce")) {
-    cardDebounceMs = (unsigned long)getRequestArg("card_debounce").toInt();
+  if (server.hasArg("card_debounce")) {
+    cardDebounceMs = (unsigned long)server.arg("card_debounce").toInt();
     Serial.printf("[SETTINGS] Card Debounce set to: %lu ms\n", cardDebounceMs);
   }
-  if (hasRequestArg("lcd_brightness_pct")) {
-    int pct = getRequestArg("lcd_brightness_pct").toInt();
+  if (server.hasArg("lcd_brightness_pct")) {
+    int pct = server.arg("lcd_brightness_pct").toInt();
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     lcdActiveBrightness = (uint8_t)round((pct / 100.0) * 255.0);
     applyLcdPwm(lcdActiveBrightness);
     Serial.printf("[SETTINGS] LCD Brightness set to: %u / 255 (%d%%)\n", lcdActiveBrightness, pct);
-  } else if (hasRequestArg("lcd_brightness")) {
-    int b = getRequestArg("lcd_brightness").toInt();
+  } else if (server.hasArg("lcd_brightness")) {
+    int b = server.arg("lcd_brightness").toInt();
     if (b < 0) b = 0;
     if (b > 255) b = 255;
     lcdActiveBrightness = (uint8_t)b;
@@ -5173,21 +5124,21 @@ void handleSettings() {
     Serial.printf("[SETTINGS] LCD Brightness set to: %u / 255\n", lcdActiveBrightness);
   }
 
-  if (hasRequestArg("rgb_brightness_pct")) {
-    int pct = getRequestArg("rgb_brightness_pct").toInt();
+  if (server.hasArg("rgb_brightness_pct")) {
+    int pct = server.arg("rgb_brightness_pct").toInt();
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     rgbActiveBrightness = (uint8_t)round((pct / 100.0) * (float)RGB_PWM_MAX_LIMIT);
     Serial.printf("[SETTINGS] RGB Brightness set to: %u / 168 (%d%%)\n", rgbActiveBrightness, pct);
-  } else if (hasRequestArg("rgb_brightness")) {
-    int b = getRequestArg("rgb_brightness").toInt();
+  } else if (server.hasArg("rgb_brightness")) {
+    int b = server.arg("rgb_brightness").toInt();
     if (b < 0) b = 0;
     if (b > RGB_PWM_MAX_LIMIT) b = RGB_PWM_MAX_LIMIT;
     rgbActiveBrightness = (uint8_t)b;
     Serial.printf("[SETTINGS] RGB Brightness set to: %u / 168\n", rgbActiveBrightness);
   }
-  if (hasRequestArg("lcd_dim_duration")) {
-    lcdDimDurationMs = (unsigned long)getRequestArg("lcd_dim_duration").toInt();
+  if (server.hasArg("lcd_dim_duration")) {
+    lcdDimDurationMs = (unsigned long)server.arg("lcd_dim_duration").toInt();
     Serial.printf("[SETTINGS] LCD Dim Duration set to: %lu ms\n", lcdDimDurationMs);
   }
   saveSystemSettings();
@@ -5196,11 +5147,11 @@ void handleSettings() {
 
 void handleSetWifiPassword() {
   wakeLcd();
-  if (!hasRequestArg("password")) {
+  if (!server.hasArg("password")) {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing password parameter.\"}");
     return;
   }
-  String newPass = getRequestArg("password");
+  String newPass = server.arg("password");
   newPass.trim();
 
   // Validate: min 8 characters for WPA2 standard, or empty string for open network
@@ -5249,13 +5200,13 @@ void handleLcdWake() {
 void handleLcdBrightness() {
   wakeLcd();
   int b = -1;
-  if (hasRequestArg("pct")) {
-    int pct = getRequestArg("pct").toInt();
+  if (server.hasArg("pct")) {
+    int pct = server.arg("pct").toInt();
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     b = (int)round((pct / 100.0) * 255.0);
-  } else if (hasRequestArg("brightness")) {
-    b = getRequestArg("brightness").toInt();
+  } else if (server.hasArg("brightness")) {
+    b = server.arg("brightness").toInt();
   }
   if (b >= 0) {
     if (b > 255) b = 255;
@@ -5272,13 +5223,13 @@ void handleLcdBrightness() {
 
 void handleRgbBrightness() {
   int b = -1;
-  if (hasRequestArg("pct")) {
-    int pct = getRequestArg("pct").toInt();
+  if (server.hasArg("pct")) {
+    int pct = server.arg("pct").toInt();
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     b = (int)round((pct / 100.0) * (float)RGB_PWM_MAX_LIMIT);
-  } else if (hasRequestArg("brightness")) {
-    b = getRequestArg("brightness").toInt();
+  } else if (server.hasArg("brightness")) {
+    b = server.arg("brightness").toInt();
   }
   if (b >= 0) {
     if (b > RGB_PWM_MAX_LIMIT) b = RGB_PWM_MAX_LIMIT;
@@ -5321,7 +5272,7 @@ void handleLcdTest() {
 
 void handleRgbTest() {
   wakeLcd();
-  String mode = hasRequestArg("mode") ? getRequestArg("mode") : "recorded";
+  String mode = server.hasArg("mode") ? server.arg("mode") : "recorded";
   if (mode == "recorded" || mode == "green") {
     triggerRgbFeedback(RGB_FEEDBACK_RECORDED);
     server.send(200, "application/json", "{\"success\":true,\"message\":\"Testing RGB: Green (Recorded 1.5s)\"}");
@@ -5436,11 +5387,11 @@ void handleExportSystemBackup() {
 
 void handleImportCards() {
   wakeLcd();
-  if (!hasRequestArg("data")) {
+  if (!server.hasArg("data")) {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing card data\"}");
     return;
   }
-  String data = getRequestArg("data");
+  String data = server.arg("data");
   int importedCount = 0;
   int skippedCount = 0;
 
@@ -5517,11 +5468,11 @@ void handleImportCards() {
 }
 
 void handleSettingsState() {
-  if (hasRequestArg("open")) {
-    isSettingsOpen = (getRequestArg("open") == "1");
+  if (server.hasArg("open")) {
+    isSettingsOpen = (server.arg("open") == "1");
   }
-  if (hasRequestArg("tab")) {
-    String tab = getRequestArg("tab");
+  if (server.hasArg("tab")) {
+    String tab = server.arg("tab");
     isRegistrationTab = (tab == "notion-reg-single" || tab == "notion-reg-batch" || tab == "set-register" || tab == "set-batch");
   } else if (!isSettingsOpen) {
     isRegistrationTab = false;
@@ -5530,199 +5481,6 @@ void handleSettingsState() {
                 isSettingsOpen ? "OPEN" : "CLOSED",
                 isRegistrationTab ? "ACTIVE" : "OFF");
   server.send(200, "application/json", "{\"success\":true,\"is_settings_open\":" + String(isSettingsOpen ? "true" : "false") + ",\"is_registration_tab\":" + String(isRegistrationTab ? "true" : "false") + "}");
-}
-
-void handleGetSettings() {
-  String json = "{";
-  json += "\"success\":true,";
-  json += "\"require_registration\":" + String(requireRegistration ? "true" : "false") + ",";
-  json += "\"card_debounce\":" + String(cardDebounceMs) + ",";
-  json += "\"lcd_timeout\":" + String(lcdStandbyTimeoutMs) + ",";
-  json += "\"show_lcd_wifi\":" + String(showLcdWifiGuide ? "true" : "false") + ",";
-  uint8_t lcdPct = (uint8_t)round(((float)lcdActiveBrightness / 255.0f) * 100.0f);
-  uint8_t rgbPct = (uint8_t)round(((float)rgbActiveBrightness / (float)RGB_PWM_MAX_LIMIT) * 100.0f);
-  json += "\"lcd_brightness_pct\":" + String(lcdPct) + ",";
-  json += "\"lcd_dim_duration\":" + String(lcdDimDurationMs) + ",";
-  json += "\"rgb_brightness_pct\":" + String(rgbPct) + ",";
-  json += "\"wifi_ssid\":\"" + escapeJson(String(AP_SSID)) + "\",";
-  json += "\"wifi_pass_pending\":" + String(currentApPass != nextApPass ? "true" : "false");
-  json += "}";
-  server.send(200, "application/json", json);
-}
-
-void handleAddOrUpdateCard() {
-  wakeLcd();
-  if (!hasRequestArg("uid")) {
-    server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing uid\"}");
-    return;
-  }
-  String uid = getRequestArg("uid");
-  uid.trim();
-  uid.toUpperCase();
-  if (uid.length() == 0) {
-    server.send(400, "application/json", "{\"success\":false,\"message\":\"UID cannot be empty\"}");
-    return;
-  }
-
-  String name = hasRequestArg("name") ? getRequestArg("name") : "Unnamed Card";
-  name.trim();
-  String studentId = hasRequestArg("student_id") ? getRequestArg("student_id") : (hasRequestArg("id") ? getRequestArg("id") : "");
-  studentId.trim();
-  String regDate = isTimeSet ? getCurrentDateString() : "Undated";
-
-  bool updated = false;
-  for (auto& c : registeredCards) {
-    if (c.uid.equalsIgnoreCase(uid)) {
-      c.name = name;
-      c.studentId = studentId;
-      updated = true;
-      break;
-    }
-  }
-
-  if (!updated) {
-    RegisteredCard c;
-    c.uid = uid;
-    c.name = name;
-    c.studentId = studentId;
-    c.regDate = regDate;
-    registeredCards.push_back(c);
-  }
-
-  saveRegisteredCards();
-  Serial.printf("[CARD API] %s card: %s [%s]\n", updated ? "Updated" : "Added", name.c_str(), uid.c_str());
-  server.send(200, "application/json", "{\"success\":true,\"updated\":" + String(updated ? "true" : "false") + ",\"uid\":\"" + escapeJson(uid) + "\",\"name\":\"" + escapeJson(name) + "\",\"message\":\"Card saved successfully!\"}");
-}
-
-void handleManualAttendance() {
-  wakeLcd();
-  if (!sessionActive) {
-    server.send(400, "application/json", "{\"success\":false,\"message\":\"No active attendance session\"}");
-    return;
-  }
-  String name = hasRequestArg("name") ? getRequestArg("name") : "";
-  name.trim();
-  if (name.length() == 0) {
-    server.send(400, "application/json", "{\"success\":false,\"message\":\"Attendee name cannot be empty\"}");
-    return;
-  }
-
-  String studentId = hasRequestArg("student_id") ? getRequestArg("student_id") : (hasRequestArg("id") ? getRequestArg("id") : "");
-  studentId.trim();
-  String uid = hasRequestArg("uid") ? getRequestArg("uid") : ("MANUAL_" + String(millis() % 10000));
-  uid.trim();
-  String type = hasRequestArg("type") ? getRequestArg("type") : sessionType;
-  if (type != "Entrance" && type != "Exit") type = sessionType;
-
-  String scanTime = getCurrentTime12h();
-  time_t nowTs = time(nullptr);
-
-  AttendanceRecord* existingRec = nullptr;
-  for (auto& r : attendanceRecords) {
-    if ((studentId.length() > 0 && r.studentId == studentId) || r.name.equalsIgnoreCase(name) || (r.uid == uid && uid.indexOf("MANUAL_") == -1)) {
-      existingRec = &r;
-      break;
-    }
-  }
-
-  if (type == "Entrance") {
-    if (existingRec != nullptr) {
-      existingRec->inTime = scanTime;
-      existingRec->inTimestamp = nowTs;
-    } else {
-      AttendanceRecord rec;
-      rec.uid = uid;
-      rec.name = name;
-      rec.studentId = studentId;
-      rec.inTime = scanTime;
-      rec.outTime = "--";
-      rec.inTimestamp = nowTs;
-      rec.outTimestamp = 0;
-      attendanceRecords.push_back(rec);
-    }
-  } else {
-    // Exit
-    if (existingRec != nullptr) {
-      existingRec->outTime = scanTime;
-      existingRec->outTimestamp = nowTs;
-    } else {
-      AttendanceRecord rec;
-      rec.uid = uid;
-      rec.name = name;
-      rec.studentId = studentId;
-      rec.inTime = "--";
-      rec.outTime = scanTime;
-      rec.inTimestamp = 0;
-      rec.outTimestamp = nowTs;
-      attendanceRecords.push_back(rec);
-    }
-  }
-
-  lastScan.uid = uid;
-  lastScan.name = name;
-  lastScan.timeStr = scanTime;
-  lastScan.type = type;
-  lastScan.isDuplicate = false;
-  lastScan.isRegistered = true;
-  lastScan.message = "Manual " + type + ": " + name + " at " + scanTime;
-  lastScan.scanMillis = millis();
-
-  showLcdAttendance(type, name);
-  triggerRgbFeedback(RGB_FEEDBACK_RECORDED);
-
-  server.send(200, "application/json", "{\"success\":true,\"name\":\"" + escapeJson(name) + "\",\"type\":\"" + escapeJson(type) + "\",\"time\":\"" + escapeJson(scanTime) + "\",\"message\":\"Manual attendance recorded!\"}");
-}
-
-void handleDeleteAttendance() {
-  wakeLcd();
-  int targetIndex = -1;
-  String targetUid = "";
-  if (hasRequestArg("index")) {
-    targetIndex = getRequestArg("index").toInt() - 1;
-  }
-  if (hasRequestArg("uid")) {
-    targetUid = getRequestArg("uid");
-  }
-
-  bool found = false;
-  if (targetIndex >= 0 && targetIndex < (int)attendanceRecords.size()) {
-    attendanceRecords.erase(attendanceRecords.begin() + targetIndex);
-    found = true;
-  } else if (targetUid.length() > 0) {
-    for (size_t i = 0; i < attendanceRecords.size(); i++) {
-      if (attendanceRecords[i].uid.equalsIgnoreCase(targetUid)) {
-        attendanceRecords.erase(attendanceRecords.begin() + i);
-        found = true;
-        break;
-      }
-    }
-  }
-
-  if (found) {
-    server.send(200, "application/json", "{\"success\":true,\"attendee_count\":" + String(attendanceRecords.size()) + ",\"message\":\"Record removed from session.\"}");
-  } else {
-    server.send(404, "application/json", "{\"success\":false,\"message\":\"Record not found in active session.\"}");
-  }
-}
-
-void handleLcdCustomMessage() {
-  wakeLcd();
-  String row0 = hasRequestArg("line1") ? getRequestArg("line1") : (hasRequestArg("row0") ? getRequestArg("row0") : "");
-  String row1 = hasRequestArg("line2") ? getRequestArg("line2") : (hasRequestArg("row1") ? getRequestArg("row1") : "");
-  unsigned long duration = hasRequestArg("duration") ? (unsigned long)getRequestArg("duration").toInt() : 3000UL;
-  if (duration < 1000) duration = 1000;
-  if (duration > 15000) duration = 15000;
-
-  if (lcdAvailable) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(centerText(row0));
-    lcd.setCursor(0, 1);
-    lcd.print(centerText(row1));
-    lcdMessageUntil = millis() + duration;
-  }
-
-  server.send(200, "application/json", "{\"success\":true,\"message\":\"Custom message displayed on LCD.\"}");
 }
 
 void handleGetAttendance() {
@@ -5773,11 +5531,11 @@ void handleGetHistory() {
 }
 
 void handleGetHistorySession() {
-  if (!hasRequestArg("id")) {
+  if (!server.hasArg("id")) {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing session id\"}");
     return;
   }
-  String id = getRequestArg("id");
+  String id = server.arg("id");
   SavedSessionItem* targetItem = nullptr;
   for (auto& item : sessionHistory) {
     if (item.id == id) {
@@ -5838,11 +5596,11 @@ void handleGetHistorySession() {
 }
 
 void handleExportHistoryCsv() {
-  if (!hasRequestArg("id")) {
+  if (!server.hasArg("id")) {
     server.send(400, "text/plain", "Missing session id");
     return;
   }
-  String id = getRequestArg("id");
+  String id = server.arg("id");
   SavedSessionItem* targetItem = nullptr;
   for (auto& item : sessionHistory) {
     if (item.id == id) {
@@ -5894,11 +5652,11 @@ void handleExportHistoryCsv() {
 }
 
 void handleDeleteHistorySession() {
-  if (!hasRequestArg("id")) {
+  if (!server.hasArg("id")) {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing id\"}");
     return;
   }
-  String id = getRequestArg("id");
+  String id = server.arg("id");
   String path = "/" + id + ".txt";
   if (LittleFS.exists(path.c_str())) {
     LittleFS.remove(path.c_str());
@@ -5915,11 +5673,11 @@ void handleDeleteHistorySession() {
 
 void handleResumeHistorySession() {
   wakeLcd();
-  if (!hasRequestArg("id")) {
+  if (!server.hasArg("id")) {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing session id\"}");
     return;
   }
-  String id = getRequestArg("id");
+  String id = server.arg("id");
   id.trim();
 
   SavedSessionItem* targetItem = nullptr;
@@ -6077,8 +5835,8 @@ void handleExportCsv() {
 void handleRegisterStart() {
   wakeLcd();
   String name = "";
-  if (hasRequestArg("name")) {
-    name = getRequestArg("name");
+  if (server.hasArg("name")) {
+    name = server.arg("name");
   }
   name.trim();
   if (name.length() == 0) {
@@ -6086,9 +5844,9 @@ void handleRegisterStart() {
     return;
   }
   regCandidateName = name;
-  regCandidateId = hasRequestArg("student_id") ? getRequestArg("student_id") : "";
+  regCandidateId = server.hasArg("student_id") ? server.arg("student_id") : "";
   regCandidateId.trim();
-  regBatchInfo = hasRequestArg("batch_info") ? getRequestArg("batch_info") : "";
+  regBatchInfo = server.hasArg("batch_info") ? server.arg("batch_info") : "";
   regBatchInfo.trim();
 
   regConflictName = "";
@@ -6152,11 +5910,11 @@ void handleGetCards() {
 }
 
 void handleDeleteCard() {
-  if (!hasRequestArg("uid")) {
+  if (!server.hasArg("uid")) {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing UID parameter\"}");
     return;
   }
-  String uid = getRequestArg("uid");
+  String uid = server.arg("uid");
   uid.trim();
   bool found = false;
   for (auto it = registeredCards.begin(); it != registeredCards.end(); ++it) {
@@ -6201,13 +5959,6 @@ void handleCaptivePortalRedirect() {
 }
 
 void handleNotFound() {
-  // If an Android/client API endpoint was requested, always return JSON
-  if (server.uri().startsWith("/api/")) {
-    server.send(404, "application/json", "{\"success\":false,\"message\":\"API endpoint not found: " + escapeJson(server.uri()) + "\"}");
-    return;
-  }
-
-  // Captive Portal redirection for browsers requesting external domains
   String host = server.hostHeader();
   if (host != "192.168.4.1" && host != "192.168.4.1:80") {
     handleCaptivePortalRedirect();
@@ -6307,13 +6058,7 @@ void setup() {
   server.on("/api/history/resume", HTTP_POST, handleResumeHistorySession);
   server.on("/api/history/delete", HTTP_POST, handleDeleteHistorySession);
   server.on("/api/history/clear", HTTP_POST, handleClearAllHistory);
-  server.on("/api/settings", HTTP_GET, handleGetSettings);
   server.on("/api/settings", HTTP_POST, handleSettings);
-  server.on("/api/cards/add", HTTP_POST, handleAddOrUpdateCard);
-  server.on("/api/cards/save", HTTP_POST, handleAddOrUpdateCard);
-  server.on("/api/attendance/manual", HTTP_POST, handleManualAttendance);
-  server.on("/api/attendance/delete", HTTP_POST, handleDeleteAttendance);
-  server.on("/api/lcd/message", HTTP_POST, handleLcdCustomMessage);
   server.on("/api/settings/state", HTTP_POST, handleSettingsState);
   server.on("/api/wifi/password", HTTP_POST, handleSetWifiPassword);
   server.on("/api/attendance", HTTP_GET, handleGetAttendance);
@@ -6348,9 +6093,8 @@ void setup() {
   server.on("/ncsi.txt", handleCaptivePortalRedirect);
   server.onNotFound(handleNotFound);
 
-  server.enableCORS(true);
   server.begin();
-  Serial.println("[HTTP] Web server started on port 80 (CORS enabled).");
+  Serial.println("[HTTP] Web server started on port 80.");
   blinkLed(600); // Startup confirmation blink
 }
 
