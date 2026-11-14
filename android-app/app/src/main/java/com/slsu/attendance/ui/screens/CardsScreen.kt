@@ -1,9 +1,9 @@
 package com.slsu.attendance.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -11,7 +11,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -36,110 +35,147 @@ fun CardsScreen(viewModel: AttendanceViewModel, uiState: UiState) {
         }
     }
 
+    val primaryColor = MaterialTheme.colorScheme.primary
+
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Card Management", fontWeight = FontWeight.Bold) },
-                actions = {
-                    IconButton(onClick = { viewModel.loadCards() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                }
-            )
-        },
+        containerColor = MaterialTheme.colorScheme.background,
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showRegisterDialog = true },
                 icon = { Icon(Icons.Default.Contactless, contentDescription = null) },
-                text = { Text("Register Card") },
-                containerColor = MaterialTheme.colorScheme.primary
+                text = { Text("Register Card", fontWeight = FontWeight.Bold) },
+                containerColor = primaryColor,
+                contentColor = Color.White,
+                shape = RoundedCornerShape(20.dp)
             )
         }
     ) { paddingValues ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "DATABASE REGISTRY",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.2.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "RFID Cards",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+
+                IconButton(onClick = { viewModel.loadCards() }) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                }
+            }
+
+            // Summary Card (28dp rounded)
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        modifier = Modifier.size(46.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        color = primaryColor.copy(alpha = 0.16f)
                     ) {
-                        Icon(
-                            Icons.Default.CreditCard,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(36.dp)
-                        )
-                        Spacer(Modifier.width(14.dp))
-                        Column {
-                            Text(
-                                text = "${uiState.registeredCards.size} Registered Cards",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Text(
-                                text = "Stored permanently in ESP32 Flash Memory",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                            )
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.CreditCard, contentDescription = null, tint = primaryColor, modifier = Modifier.size(24.dp))
                         }
+                    }
+                    Column {
+                        Text(
+                            text = "${uiState.registeredCards.size} Stored Tags",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            text = "Permanent LittleFS storage on ESP32",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
 
-            item {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search cards by name or student ID...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Close, contentDescription = null)
+            // Search Pill (CircleShape)
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search cards by name or student ID...") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = null)
+                        }
+                    }
+                },
+                shape = CircleShape,
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            )
+
+            // Cards List
+            if (filteredCards.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(bottom = 80.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Surface(
+                            modifier = Modifier.size(64.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.CreditCard, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(32.dp))
                             }
                         }
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    singleLine = true
-                )
-            }
-
-            if (filteredCards.isEmpty()) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 40.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
+                        Spacer(Modifier.height(10.dp))
                         Text(
-                            text = if (uiState.registeredCards.isEmpty()) "No registered cards found in database.\nClick 'Register Card' to pair your first RFID tag." else "No cards match your search.",
+                            text = if (uiState.registeredCards.isEmpty()) "No registered cards found in database.\nClick 'Register Card' to pair your first tag." else "No cards match your search.",
                             color = Color.Gray,
-                            fontSize = 14.sp,
+                            fontSize = 13.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                     }
                 }
             } else {
-                items(filteredCards, key = { it.uid ?: it.studentId ?: it.index.toString() }) { card ->
-                    CardRow(card = card, onDelete = { cardToDelete = card })
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 90.dp)
+                ) {
+                    items(filteredCards, key = { it.uid ?: it.studentId ?: it.index.toString() }) { card ->
+                        ChunkyCardItemRow(card = card, onDelete = { cardToDelete = card })
+                    }
                 }
-            }
-
-            item {
-                Spacer(modifier = Modifier.height(70.dp))
             }
         }
     }
@@ -156,14 +192,17 @@ fun CardsScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                 showRegisterDialog = false
             },
             title = {
-                Text(if (!uiState.isRegistering) "Register New RFID Card" else "Tap Card on Reader")
+                Text(
+                    text = if (!uiState.isRegistering) "Register RFID Card" else "Tap Card on Reader",
+                    fontWeight = FontWeight.Black
+                )
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (!uiState.isRegistering) {
                         Text(
-                            "Enter attendee info first, then tap the physical card on the ESP32 RC522 scanner.",
-                            fontSize = 13.sp,
+                            "Enter attendee info, then tap the physical card on the ESP32 RC522 scanner.",
+                            fontSize = 12.sp,
                             color = Color.Gray
                         )
                         OutlinedTextField(
@@ -171,48 +210,50 @@ fun CardsScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                             onValueChange = { candidateName = it },
                             label = { Text("Full Name *") },
                             placeholder = { Text("e.g. Juan D. Dela Cruz") },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp)
                         )
                         OutlinedTextField(
                             value = candidateId,
                             onValueChange = { candidateId = it },
                             label = { Text("Student / Employee ID *") },
                             placeholder = { Text("e.g. 2024-00129") },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp)
                         )
                     } else {
                         // Live Scanning State
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    when (regState?.state) {
-                                        "success", "same_card" -> Color(0xFFD1FAE5)
-                                        "conflict" -> Color(0xFFFEE2E2)
-                                        else -> MaterialTheme.colorScheme.surfaceVariant
-                                    }
-                                )
-                                .padding(16.dp),
-                            contentAlignment = Alignment.Center
+                        ElevatedCard(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.elevatedCardColors(
+                                containerColor = when (regState?.state) {
+                                    "success", "same_card" -> Color(0xFFD1FAE5)
+                                    "conflict" -> Color(0xFFFEE2E2)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                }
+                            )
                         ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Column(
+                                modifier = Modifier.padding(20.dp).fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
                                 if (regState?.state == "waiting") {
-                                    CircularProgressIndicator(modifier = Modifier.size(36.dp))
-                                    Spacer(Modifier.height(12.dp))
-                                    Text("Waiting for physical card tap...", fontWeight = FontWeight.Bold)
-                                    Text("Bring RFID tag close to RC522 module", fontSize = 12.sp, color = Color.Gray)
+                                    CircularProgressIndicator(modifier = Modifier.size(36.dp), color = primaryColor)
+                                    Spacer(Modifier.height(14.dp))
+                                    Text("Waiting for physical card tap...", fontWeight = FontWeight.Black)
+                                    Text("Bring RFID tag close to RC522 module", fontSize = 11.sp, color = Color.Gray)
                                 } else if (regState?.state == "success" || regState?.state == "same_card") {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF059669), modifier = Modifier.size(40.dp))
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF059669), modifier = Modifier.size(44.dp))
                                     Spacer(Modifier.height(8.dp))
-                                    Text("Card Registered!", fontWeight = FontWeight.Bold, color = Color(0xFF047857))
-                                    Text("UID: ${regState.resultUid}", fontSize = 13.sp)
-                                    Text("Assigned to: ${regState.candidateName}", fontSize = 13.sp)
+                                    Text("Card Registered!", fontWeight = FontWeight.Black, color = Color(0xFF047857))
+                                    Text("UID: ${regState.resultUid}", fontSize = 12.sp)
+                                    Text("Assigned to: ${regState.candidateName}", fontSize = 12.sp)
                                 } else if (regState?.state == "conflict") {
-                                    Icon(Icons.Default.Error, contentDescription = null, tint = Color(0xFFDC2626), modifier = Modifier.size(40.dp))
+                                    Icon(Icons.Default.Error, contentDescription = null, tint = Color(0xFFDC2626), modifier = Modifier.size(44.dp))
                                     Spacer(Modifier.height(8.dp))
-                                    Text("Card Already In Use!", fontWeight = FontWeight.Bold, color = Color(0xFF991B1B))
-                                    Text("Owner: ${regState.conflictOwner} (${regState.conflictId})", fontSize = 12.sp)
+                                    Text("Card Already In Use!", fontWeight = FontWeight.Black, color = Color(0xFF991B1B))
+                                    Text("Owner: ${regState.conflictOwner}", fontSize = 12.sp)
                                 } else {
                                     Text(regState?.message ?: "Status: ${regState?.state ?: "idle"}")
                                 }
@@ -225,6 +266,7 @@ fun CardsScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                 if (!uiState.isRegistering) {
                     Button(
                         enabled = candidateName.isNotBlank() && candidateId.isNotBlank(),
+                        shape = CircleShape,
                         onClick = {
                             viewModel.startCardRegistration(candidateName, candidateId)
                         }
@@ -232,10 +274,13 @@ fun CardsScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                         Text("Arm Scanner")
                     }
                 } else if (regState?.state == "success" || regState?.state == "same_card") {
-                    Button(onClick = {
-                        viewModel.cancelRegistration()
-                        showRegisterDialog = false
-                    }) {
+                    Button(
+                        shape = CircleShape,
+                        onClick = {
+                            viewModel.cancelRegistration()
+                            showRegisterDialog = false
+                        }
+                    ) {
                         Text("Done")
                     }
                 }
@@ -255,12 +300,13 @@ fun CardsScreen(viewModel: AttendanceViewModel, uiState: UiState) {
     cardToDelete?.let { card ->
         AlertDialog(
             onDismissRequest = { cardToDelete = null },
-            title = { Text("Delete Card?") },
+            title = { Text("Delete Card?", fontWeight = FontWeight.Black) },
             text = {
                 Text("Are you sure you want to remove card UID ${card.uid} assigned to ${card.name}?")
             },
             confirmButton = {
                 Button(
+                    shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                     onClick = {
                         card.uid?.let { viewModel.deleteCard(it) }
@@ -280,11 +326,14 @@ fun CardsScreen(viewModel: AttendanceViewModel, uiState: UiState) {
 }
 
 @Composable
-fun CardRow(card: CardItem, onDelete: () -> Unit) {
-    Card(
+fun ChunkyCardItemRow(card: CardItem, onDelete: () -> Unit) {
+    val primaryColor = MaterialTheme.colorScheme.primary
+
+    ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp)
     ) {
         Row(
             modifier = Modifier
@@ -292,45 +341,45 @@ fun CardRow(card: CardItem, onDelete: () -> Unit) {
                 .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.secondaryContainer),
-                contentAlignment = Alignment.Center
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = primaryColor.copy(alpha = 0.16f)
             ) {
-                Icon(
-                    Icons.Default.CreditCard,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.size(24.dp)
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.CreditCard,
+                        contentDescription = null,
+                        tint = primaryColor,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.width(14.dp))
+            Spacer(Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = card.name?.ifBlank { "Unassigned" } ?: "Attendee",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
                 )
                 Text(
                     text = "ID: ${card.studentId?.ifBlank { "--" }} • UID: ${card.uid ?: "--"}",
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (!card.regDate.isNullOrBlank()) {
                     Text(
                         text = "Registered: ${card.regDate}",
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         color = Color.Gray
                     )
                 }
             }
 
             IconButton(onClick = onDelete) {
-                Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = Color.Gray)
+                Icon(Icons.Default.Close, contentDescription = "Delete", tint = Color.Gray, modifier = Modifier.size(16.dp))
             }
         }
     }

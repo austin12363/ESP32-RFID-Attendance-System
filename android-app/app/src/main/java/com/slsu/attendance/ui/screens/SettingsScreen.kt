@@ -43,14 +43,14 @@ fun SettingsScreen(viewModel: AttendanceViewModel, uiState: UiState) {
             item {
                 Column {
                     Text(
-                        text = "MATERIAL YOU",
+                        text = "SYSTEM CONFIGURATION",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 1.2.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "Hardware & Settings",
+                        text = "Terminal Settings",
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Black
                     )

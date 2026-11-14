@@ -47,7 +47,7 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
 
-            // 1. Material You Greeting & Status Pills (Matching Reference Image 2)
+            // 1. Material You System Header & Status Pills
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -56,14 +56,14 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                 ) {
                     Column {
                         Text(
-                            text = "ESP32 TERMINAL",
+                            text = "RC522 STANDALONE TERMINAL",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Black,
                             letterSpacing = 1.2.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "Attendance Hub",
+                            text = "Attendance Console",
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Black,
                             color = MaterialTheme.colorScheme.onSurface
