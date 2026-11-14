@@ -1,11 +1,61 @@
-# Build directories
+# Arduino & ESP32 Build Outputs
 build/
 **/build/
+*.bin
+*.elf
+*.hex
+*.map
+*.o
+*.d
 
-# Python
+# Python / Tools Cache & Check Scripts
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+check_*.py
 
-# OS
-Thumbs.db
+# Scratch & Temporary Files
+scratch/
+**/scratch/
+*.tmp
+*.bak
+*.log
+extracted_script.js
+
+# Local CAD Models, Drawings & 3D Assemblies (Keep off GitHub)
+CAD_Model/
+final render/
+*.iam
+*.ipt
+*.idw
+*.stl
+*.step
+
+# Proposals, Presentation Documents & Old Assets
+proposal_one_pager*
+*.docx
+*.pdf
+render_hero_thumb.png
+terminal_render.jpg
+
+# Subfolder Backup Clone
+ESP32-RFID-Attendance-System/
+test_bt/
+
+# Root Redundant Duplicates (Maintained inside their respective subfolders)
+/ESP32_RFID_Attendance.ino
+/attendance_terminal_enclosure_concept.jpg
+/upload_to_esp32.bat
+
+# Editor & IDE Directories
+.vscode/
+.idea/
+*.swp
+*~
+
+# Operating System Files
 .DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db

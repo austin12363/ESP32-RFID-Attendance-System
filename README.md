@@ -1,193 +1,277 @@
-# ESP32 + RC522 RFID Attendance System (Self-Contained Offline Web App)
+# ESP32 + RC522 RFID Attendance System
 
-A complete, production-ready, standalone RFID attendance system powered by an **ESP32** microcontroller and an **MFRC522** RFID reader.
+[![ESP32](https://img.shields.io/badge/Platform-ESP32-blue.svg)](https://www.espressif.com/)
+[![Arduino IDE](https://img.shields.io/badge/IDE-Arduino%202.x-00979C.svg)](https://www.arduino.cc/)
+[![RFID](https://img.shields.io/badge/RFID-MFRC522%2013.56MHz-orange.svg)](https://github.com/miguelbalboa/rfid)
+[![Display](https://img.shields.io/badge/Display-I2C%2016x2%20LCD-green.svg)](https://github.com/johnrickman/LiquidCrystal_I2C)
+[![Offline](https://img.shields.io/badge/Network-100%25%20Offline%20Captive%20Portal-red.svg)](#key-features)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-The system broadcasts its own **Wi-Fi Hotspot** with a built-in **Captive Portal** and serves a modern, responsive web application directly from the ESP32's flash memory. **No internet connection, no external RTC hardware module, and no external servers or cloud dependencies are required.**
+A complete, production-ready, standalone RFID attendance terminal powered by an **ESP32** microcontroller, an **MFRC522** 13.56 MHz RFID reader, and an **I2C 16x2 LCD display**.
+
+The terminal broadcasts its own **Wi-Fi Access Point** with a built-in **DNS Captive Portal** and serves an interactive **Material Design 3 Kiosk Web Application** directly from the ESP32 internal flash memory. 
+
+> **Zero Cloud & Zero External Hardware RTC:** No internet connection, no routers, no external servers, and no coin-battery RTC hardware modules (DS3231/DS1307) are required. Time is synchronized in 1 click directly from the administrator's phone or computer browser.
+
+---
+
+## Hardware Terminal Concept
+
+![Terminal Enclosure Concept](assets/attendance_terminal_enclosure_concept.jpg)
+
+*Concept rendering of the portable desktop enclosure featuring the ESP32 core, MFRC522 RFID tap zone, 16x2 LCD character screen, and audio-visual feedback.*
 
 ---
 
 ## Table of Contents
+
 1. [Key Features](#key-features)
-2. [Hardware Wiring Diagram](#hardware-wiring-diagram)
-3. [Arduino IDE Setup & Installation](#arduino-ide-setup--installation)
-4. [How to Use the System](#how-to-use-the-system)
-   - [1. Connect to the Wi-Fi Hotspot](#1-connect-to-the-wi-fi-hotspot)
-   - [2. First Boot Onboarding (Time Sync & Direction Prompt)](#2-first-boot-onboarding-time-sync--direction-prompt)
-   - [3. Register RFID Tags / Cards](#3-register-rfid-tags--cards)
-   - [4. Run an Attendance Session (Entrance & Exit)](#4-run-an-attendance-session-entrance--exit)
-   - [5. Export Attendance & Database to CSV](#5-export-attendance--database-to-csv)
-5. [API Endpoints Reference](#api-endpoints-reference)
-6. [Troubleshooting & Diagnostics](#troubleshooting--diagnostics)
+2. [Hardware Components & Pinout](#hardware-components--pinout)
+3. [Wiring Diagram](#wiring-diagram)
+4. [Arduino IDE Setup & Installation](#arduino-ide-setup--installation)
+5. [Step-by-Step Usage Guide](#step-by-step-usage-guide)
+   - [1. Connect to Wi-Fi Access Point](#1-connect-to-wi-fi-access-point)
+   - [2. Time Sync & Session Setup](#2-time-sync--session-setup)
+   - [3. Register RFID Cards / Tags](#3-register-rfid-cards--tags)
+   - [4. Running Attendance (IN & OUT Modes)](#4-running-attendance-in--out-modes)
+   - [5. Exporting CSV Attendance Reports](#5-exporting-csv-attendance-reports)
+6. [REST API Documentation](#rest-api-documentation)
+7. [Repository File Structure](#repository-file-structure)
+8. [Troubleshooting & Diagnostics](#troubleshooting--diagnostics)
+9. [License](#license)
 
 ---
 
 ## Key Features
 
-- **All-in-One INO Sketch:** Everything (C++ logic, web server routes, DNS captive portal, persistent NVS flash storage, HTML5, CSS3, JavaScript, and Web Audio chimes) is self-contained in a single `.ino` file.
-- **Standalone Wi-Fi Hotspot & Captive Portal:** Broadcasts `ESP32-Attendance` on `192.168.4.1` with support for up to 8 concurrent clients. Connecting smartphones and laptops automatically open or redirect to the dashboard.
-- **First-Boot Time Onboarding (No RTC Module Required):** Because ESP32 has no battery RTC, upon entering the webapp for the first time, an onboarding setup modal immediately asks the user to synchronize the system clock (1-click browser time sync or manual date-time picker) AND select the initial attendance direction (Entrance/Exit).
-- **Two-Step Card Registration Flow:** In the webapp, enter the owner's name and optional ID, confirm, and tap the RFID card against the RC522 reader. Saved permanently into ESP32 non-volatile storage (NVS Preferences). Allows rapid continuous registration for entire classes.
-- **Session-Based Attendance:** Attendance is accepted **only** when a session is active (`sessionActive == true`).
-- **Strict "Repeated Cards Listed as ONE" Enforcement:**
-  - Each attendee is represented by **exactly one row** in the roster table, displaying their Name, Student/Employee ID, Card UID, Time IN, Time OUT, and status badge (*Checked In*, *Checked Out*, or *Completed*).
-  - Repeated taps in the same direction are detected and ignored as duplicates with amber warnings and audio blips, never creating duplicate rows.
-  - Toggling between Entrance and Exit seamlessly updates the attendee's IN and OUT timestamps without duplicate records.
-- **Strict Registration Policy Toggle:** Configurable in Settings to block unregistered cards with an audio warning and visual notice, or allow unregistered scans.
-- **RF Sensitivity Boost:** Hardware antenna gain is configured to maximum (48 dB `RxGain_max`), maximizing read range and responsiveness across Mifare Classic, Ultralight, and NTAG cards.
-- **Instant CSV Export:** One-click download of the complete session roster to a CSV spreadsheet directly on your phone or laptop.
+- **All-in-One Self-Contained Firmware:** The C++ microcontroller logic, Wi-Fi AP, DNS server, REST API endpoints, LittleFS history, NVS persistence, and the complete Material Design 3 frontend (HTML5/CSS3/JavaScript/Web Audio synthesis) reside in a single optimized sketch.
+- **Standalone Wi-Fi Hotspot & Captive Portal:** Broadcasts `ESP32-Attendance` on `192.168.4.1`. Connecting smartphones and laptops automatically trigger the captive portal prompt and open the dashboard without requiring an IP address lookup.
+- **Split-Screen Kiosk Console (60% / 40%):**
+  - **60% RFID Tap Sensor View:** Interactive animated radar pulse rings, greeting prompts, and large scan confirmation panels with 1.5-second auto-reset.
+  - **40% Live Attendance Roster:** Real-time searchable roster table displaying Attendee Name, Student/Employee ID, Card UID, Time IN, Time OUT, and status badges.
+- **Hardware I2C 16x2 Character LCD:**
+  - Auto-probes I2C addresses `0x27` and `0x3F`.
+  - **Row 0:** Centered `TIME IN` or `TIME OUT`.
+  - **Row 1:** Attendee formatted as `SURNAME, Initial.` (e.g., `DELA CRUZ, J.`) displayed for 1.5 seconds.
+  - **Idle State:** Displays live 12-hour clock, active session direction (`[IN]` or `[OUT]`), and card tap instructions.
+- **Strict Deduplication ("Repeated Cards Listed as ONE"):**
+  - Each individual attendee is maintained as **exactly one unique row** in the roster table.
+  - Duplicate taps in the same direction are caught and acknowledged with amber warnings and audio blips without creating duplicate entries.
+  - Switching between Entrance and Exit updates the existing attendee's timestamp and sets status to `Completed`.
+- **Software Crystal Clock (No Hardware RTC Required):** 1-click synchronization button reads the local UNIX epoch timestamp and timezone offset directly from the administrator's device.
+- **Two-Step RFID Card Registration:**
+  - Enter student/employee name and ID number in the web modal, then tap the card to pair.
+  - Permanently saved in ESP32 non-volatile storage (NVS Preferences), retained across power cycles.
+- **Session History & Instant CSV Export:**
+  - Stores past session records in ESP32 LittleFS flash filesystem.
+  - Instant one-click CSV download for Excel, Google Sheets, or institutional databases.
+- **Enhanced RF Sensitivity:** Configured with maximum hardware antenna gain (`RxGain_max`, 48 dB) for fast, reliable reads through phone cases and keychains.
 
 ---
 
-## Hardware Wiring Diagram
+## Hardware Components & Pinout
 
-Connect the **MFRC522 RFID Reader** and **I2C 16x2 LCD** to your **ESP32** board:
+### Required Parts
+1. **ESP32 Dev Module** (30-pin or 38-pin ESP-WROOM-32)
+2. **MFRC522 13.56 MHz RFID Reader Module** + RFID Cards / Key Fobs (13.56 MHz Mifare Classic / Ultralight / NTAG)
+3. **16x2 LCD Display with I2C Backpack** (PCFL8574 chip, address `0x27` or `0x3F`)
+4. Micro-USB or USB-C Cable (for power and programming)
+5. Jumper wires (female-to-female and female-to-male)
 
-### 1. MFRC522 RFID Reader (SPI)
-| RC522 Pin | ESP32 Pin | Wire Color Guide | Function / Critical Notes |
+---
+
+### Pin Connection Tables
+
+#### 1. MFRC522 RFID Reader (SPI Interface)
+| RC522 Pin | ESP32 Pin | Wire Color Recommendation | Notes |
 | :--- | :--- | :--- | :--- |
-| **3.3V (VCC)** | **3V3** | Red | **CRITICAL: Connect to 3.3V ONLY! 5V will burn the RC522.** |
+| **3.3V (VCC)** | **3V3** | Red | **CRITICAL: Connect to 3.3V ONLY! 5V will permanently damage the RC522.** |
 | **RST** | **GPIO 4** | Orange | Reset Pin *(Moved to GPIO 4 to free GPIO 22 for I2C SCL)* |
-| **GND** | **GND** | Black | Ground (common ground) |
-| **IRQ** | *(Leave empty)* | -- | Not connected (software polling mode) |
-| **MISO** | **GPIO 19** | Blue | Standard VSPI MISO |
-| **MOSI** | **GPIO 23** | Green | Standard VSPI MOSI |
-| **SCK** | **GPIO 18** | Yellow | Standard VSPI SCK |
-| **SDA (SS)** | **GPIO 5** | Purple | Standard VSPI Slave Select (CS) |
+| **GND** | **GND** | Black | Common Ground |
+| **IRQ** | *(Unused)* | -- | Not connected (software polling mode) |
+| **MISO** | **GPIO 19** | Blue | VSPI MISO |
+| **MOSI** | **GPIO 23** | Green | VSPI MOSI |
+| **SCK** | **GPIO 18** | Yellow | VSPI SCK |
+| **SDA (SS)** | **GPIO 5** | Purple | VSPI Slave Select / Chip Select |
 
-### 2. I2C 16x2 LCD Display (I2C)
-| LCD Pin | ESP32 Pin | Wire Color Guide | Function / Notes |
+#### 2. I2C 16x2 LCD Display (I2C Interface)
+| LCD I2C Pin | ESP32 Pin | Wire Color Recommendation | Notes |
 | :--- | :--- | :--- | :--- |
 | **GND** | **GND** | Black | Common Ground |
 | **VCC** | **VIN / 5V** | Red | Connect to 5V (standard HD44780 contrast requires 5V) |
 | **SDA** | **GPIO 21** | Blue | Hardware I2C SDA |
-| **SCL** | **GPIO 22** | Yellow | Hardware I2C SCL *(Address auto-detected 0x27 or 0x3F)* |
+| **SCL** | **GPIO 22** | Yellow | Hardware I2C SCL *(Address auto-probed: 0x27 or 0x3F)* |
 
-> **Onboard LED:** GPIO 2 (built-in blue LED on most ESP32 Dev Modules) automatically flashes whenever an RFID card is tapped or registered.
+#### 3. Status LED
+| Component | ESP32 Pin | Notes |
+| :--- | :--- | :--- |
+| **Built-in Blue LED** | **GPIO 2** | Automatically blinks on valid card read, registration, or error |
+
+---
+
+## Wiring Diagram
+
+```text
+                  +-----------------------------------+
+                  |            ESP32 DEVKIT           |
+                  |                                   |
+    [3.3V] <------+ 3V3                           GND +------> [GND Common]
+    [GND]  <------+ GND                          GPIO 23 +------> RC522 MOSI
+    [RST]  <------+ GPIO 4                       GPIO 19 +------> RC522 MISO
+    [SDA]  <------+ GPIO 5 (SS)                  GPIO 18 +------> RC522 SCK
+                  |                              GPIO 21 +------> LCD SDA
+                  |                              GPIO 22 +------> LCD SCL
+    [5V]   <------+ VIN                           GPIO 2 +------> Onboard LED
+                  +-----------------------------------+
+```
 
 ---
 
 ## Arduino IDE Setup & Installation
 
-Follow these easy steps to upload the code to your ESP32:
-
 ### Step 1: Install ESP32 Board Package
-1. Open **Arduino IDE** (version 2.x recommended).
+1. Open **Arduino IDE** (version 2.0 or newer).
 2. Go to **File -> Preferences**.
-3. In **Additional boards manager URLs**, add:
-   ```
+3. Under **Additional boards manager URLs**, add:
+   ```text
    https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
    ```
-4. Click **OK**.
-5. Go to **Tools -> Board -> Boards Manager...** (or click the board icon on the left sidebar).
-6. Search for `esp32` by **Espressif Systems** and click **Install**.
+4. Open **Tools -> Board -> Boards Manager...**, search for `esp32` by **Espressif Systems**, and click **Install**.
 
-### Step 2: Install MFRC522 Library
-1. In Arduino IDE, go to **Tools -> Manage Libraries...** (or press `Ctrl + Shift + I`).
-2. In the search bar, type:
-   ```
-   MFRC522
-   ```
-3. Look for **MFRC522** by **GithubCommunity** (originally Miguel Balboa) and click **Install**.
+### Step 2: Install Required Libraries
+Open **Tools -> Manage Libraries...** (`Ctrl + Shift + I`) and install:
+1. **MFRC522** by *GithubCommunity* (Miguel Balboa)
+2. **LiquidCrystal_I2C** by *Frank de Brabander* (or Marco Schwartz)
 
-### Step 3: Open the Sketch & Upload
-1. Open [`ESP32_RFID_Attendance/ESP32_RFID_Attendance.ino`](file:///c:/Users/austin/OneDrive%20-%20slsu.edu.ph/Desktop/Attendance%20system/ESP32_RFID_Attendance/ESP32_RFID_Attendance.ino) in Arduino IDE.
-2. Connect your ESP32 board to your computer via micro-USB or USB-C cable.
-3. In **Tools -> Board**, select **ESP32 Dev Module** (or your specific ESP32 board model).
-4. In **Tools -> Port**, select the COM port of your ESP32 (e.g. `COM3`, `COM5`).
-5. (Optional) Set **Tools -> Upload Speed** to `921600` for faster uploading.
-6. Click the **Upload** arrow button (or press `Ctrl + U`).
-7. Once upload completes ("Done uploading"), open **Tools -> Serial Monitor** and set baud rate to `115200` to view diagnostic startup logs.
+### Step 3: Configure Board Settings & Upload
+1. Open `ESP32_RFID_Attendance/ESP32_RFID_Attendance.ino` in Arduino IDE.
+2. Select your board: **Tools -> Board -> esp32 -> ESP32 Dev Module**.
+3. Select your serial port: **Tools -> Port -> COMx** (e.g., `COM3`, `COM7`).
+4. Set **Upload Speed**: `921600` (for fast flashing).
+5. Click **Upload** (`Ctrl + U`).
+6. Once completed, open **Tools -> Serial Monitor** at baud rate **115200** to view diagnostics.
 
 ---
 
-## How to Use the System
+## Step-by-Step Usage Guide
 
-### 1. Connect to the Wi-Fi Hotspot
-1. On your smartphone, tablet, or laptop, open Wi-Fi settings.
-2. Connect to the network:
+### 1. Connect to Wi-Fi Access Point
+1. Power up the ESP32 via power bank, USB adapter, or computer.
+2. On your mobile phone, tablet, or laptop, connect to the Wi-Fi network:
    - **SSID:** `ESP32-Attendance`
    - **Password:** `12345678`
-3. A "Sign in to Wi-Fi network" captive portal prompt will appear automatically.
-4. If it doesn't open automatically, open your browser (Chrome, Safari, Edge, Firefox) and type:
-   ```
+3. A **Sign in to Wi-Fi network** captive portal banner will automatically appear. Tap it to open the console.
+4. If it does not appear automatically, open any browser (Chrome, Safari, Edge, Firefox) and navigate to:
+   ```text
    http://192.168.4.1
    ```
 
-### 2. First Boot Onboarding (Time Sync & Direction Prompt)
-- Upon entering the webapp on a fresh boot, an onboarding setup modal will automatically pop up:
-  - **Step 1:** Click **⚡ Sync Phone / Device Time Now (1-Click)** to synchronize the ESP32 software crystal clock with your phone or PC's current local time and timezone.
-  - **Step 2:** Choose the attendance direction: **Entrance (IN)** or **Exit (OUT)**, and give your session a name.
-  - Click **▶ Start Attendance Session Now** to jump directly into live scanning!
+### 2. Time Sync & Session Setup
+1. On fresh boot, the **Onboarding Setup Modal** appears automatically.
+2. Click **⚡ Sync Device Time Now (1-Click)**. The ESP32 crystal clock synchronizes instantly with your phone's local time.
+3. Select the session direction: **Entrance (IN)** or **Exit (OUT)**.
+4. Enter a session title (e.g., *CS101 Morning Lecture*) and click **Start Attendance**.
 
-### 3. Register RFID Tags / Cards
-1. In the webapp, click the **➕ Register Tag** tab.
-2. Enter the student or employee's **Full Name** (e.g., *Juan Dela Cruz*).
-3. Optionally enter their **ID Number** (e.g., *2026-0042*).
-4. Click **Step 2: Confirm & Tap Card Now**.
-5. An animated modal pops up: *"Waiting for RFID card tap against reader..."* with a 30-second countdown.
-6. Tap the RFID card or key fob onto the RC522 reader.
-7. The ESP32 flashes its LED, plays a success chime in the browser, and permanently binds the card UID to the person's name in NVS flash memory.
-8. Click **➕ Register Another Tag** to immediately register the next card without navigating away.
+### 3. Register RFID Cards / Tags
+1. Click the **⚙️ Settings** icon in the top bar.
+2. Go to the **➕ Register Tag** tab.
+3. Fill in the attendee's **Full Name** (e.g., *Juan Dela Cruz*) and optional **Student / Employee ID** (e.g., *2026-0042*).
+4. Click **Confirm & Tap Card**.
+5. The reader enters registration mode for 30 seconds. Tap the card against the RC522 sensor.
+6. The ESP32 beeps/chimes, flashes the blue LED, displays `TAG REGISTERED` on the LCD, and permanently saves the record to flash memory.
 
-### 4. Run an Attendance Session (Entrance & Exit)
-1. In the webapp, go to the **📋 Live Attendance** tab.
-2. Select session mode: **Entrance (IN)** or **Exit (OUT)**.
-3. Click **▶ Start Attendance Session**.
-4. The session is now **ACTIVE** and will accept card taps.
-5. As attendees tap their cards:
-   - The browser chimes and flashes a **green alert** showing their name and timestamp.
-   - The attendee is added to the roster table with their IN timestamp.
-   - **Repeated Card Protection:** If the student taps their card again while in the same mode, the webapp plays an alert tone, flashes an amber notice (*"Repeated Tap: Already recorded at [time]. Listed as 1 entry"*), and keeps the roster at exactly one entry.
-6. To record departure, click **🔄 Switch to Exit Mode**.
-7. When attendees tap out:
-   - Their existing roster row updates with their OUT timestamp, and status changes to **✓ Completed**.
-   - Repeated exit taps are similarly ignored as duplicates.
+### 4. Running Attendance (IN & OUT Modes)
+1. Ensure the session status shows **ACTIVE**.
+2. Have attendees tap their cards against the terminal:
+   - **LCD Screen:** Shows centered `TIME IN` or `TIME OUT` with `SURNAME, Initial.` for 1.5 seconds.
+   - **Web App Console:** The left panel animates green with the attendee's name and timestamp, playing an audio chime.
+   - **Roster Table:** The attendee row is created or updated with their exact timestamp.
+   - **Repeated Scans:** If an attendee taps twice in the same direction, the system displays an amber notice (`ALREADY LOGGED`) and preserves their original timestamp without creating duplicate rows.
+3. To switch between Entrance and Exit, click **🔄 Switch to Exit Mode** in the top bar or session menu.
 
-### 5. Export Attendance & Database to CSV
-- **Session Roster CSV:** Click **📥 Export CSV** on the Live Attendance tab to download `attendance_log.csv` (Columns: Index, Attendee Name, ID Number, Card UID, Time IN, Time OUT, Status, Session Title).
-- **Cards Database CSV:** Click **📥 Export Cards CSV** on the Registered Database tab to download `registered_cards.csv` (Columns: Index, Owner Name, ID Number, Card UID, Registered Date).
+### 5. Exporting CSV Attendance Reports
+- **Session Roster CSV:** Click **📥 Export CSV** in the Live Attendance tab to download `attendance_log.csv` (Columns: Index, Full Name, ID Number, Card UID, Time IN, Time OUT, Status, Session Title).
+- **Cards Database CSV:** In Settings -> Registered Database, click **📥 Export Cards CSV** to download `registered_cards.csv`.
 
 ---
 
-## API Endpoints Reference
+## REST API Documentation
 
-| Endpoint | Method | Description |
-| :--- | :--- | :--- |
-| `/` | `GET` | Serves the complete responsive dashboard HTML/CSS/JS |
-| `/api/status` | `GET` | Returns live system status (clock, session state, counts, latest scan) |
-| `/api/time` | `POST` | Synchronizes ESP32 clock (`epoch` timestamp, `tz_offset`) |
-| `/api/session/start` | `POST` | Starts attendance session (`type="Entrance"\|"Exit"`, `title`, optional `clear_previous=1`) |
-| `/api/session/stop` | `POST` | Stops active attendance session |
-| `/api/session/toggle_mode`| `POST` | Toggles active session between Entrance and Exit |
-| `/api/session/clear` | `POST` | Clears current attendance roster |
-| `/api/settings` | `POST` | Configures system policies (`require_registration=1\|0`) |
-| `/api/attendance` | `GET` | Returns JSON array of recorded attendees for current session |
-| `/api/attendance/export.csv` | `GET` | Streams CSV file download of attendance roster |
-| `/api/register/start` | `POST` | Puts reader into registration mode for 30s (`name`, `student_id`) |
-| `/api/register/status` | `GET` | Polls registration progress and returns captured UID |
-| `/api/register/cancel` | `POST` | Cancels active registration mode |
-| `/api/cards` | `GET` | Returns JSON array of all registered cards from NVS |
-| `/api/cards/delete` | `POST` | Deletes a registered card by `uid` |
-| `/api/cards/clear` | `POST` | Clears all registered cards from flash storage |
-| `/api/cards/export.csv` | `GET` | Streams CSV file download of all registered cards in NVS |
+> 📖 **Comprehensive API Documentation Available:** For the complete, in-depth REST API specification with Kotlin/Android Retrofit examples, data models, error codes, and request/response payloads, refer to [API_DOCUMENTATION.md](API_DOCUMENTATION.md).
+
+### Quick Endpoint Reference
+
+| Endpoint | Method | Parameters | Description |
+| :--- | :--- | :--- | :--- |
+| `/` | `GET` | None | Serves the full single-page web app |
+| `/api/status` | `GET` | None | Returns JSON object with clock, session state, attendee count, and last scan |
+| `/api/time` | `POST` | `epoch`, `tz_offset` | Sets ESP32 internal clock to given epoch and timezone |
+| `/api/session/start` | `POST` | `title`, `type`, `clear_previous` | Starts a new attendance session |
+| `/api/session/stop` | `POST` | None | Stops current attendance session |
+| `/api/session/toggle_mode` | `POST` | None | Toggles session between `Entrance` and `Exit` |
+| `/api/session/clear` | `POST` | None | Clears all attendee records from current session roster |
+| `/api/session/save_history` | `POST` | None | Archives active session records into LittleFS flash |
+| `/api/session/history` | `GET` | None | Returns list of archived sessions from LittleFS |
+| `/api/attendance` | `GET` | None | Returns JSON array of recorded attendees in active session |
+| `/api/attendance/export.csv`| `GET` | None | Streams downloadable CSV spreadsheet of session roster |
+| `/api/register/start` | `POST` | `name`, `student_id` | Enters 30-second card registration mode |
+| `/api/register/status` | `GET` | None | Polls registration status and returns captured UID |
+| `/api/register/cancel` | `POST` | None | Cancels active registration mode |
+| `/api/cards` | `GET` | None | Returns JSON array of all registered cards stored in NVS |
+| `/api/cards/delete` | `POST` | `uid` | Deletes a registered card from flash storage |
+| `/api/cards/clear` | `POST` | None | Deletes all registered cards from flash storage |
+| `/api/cards/export.csv` | `GET` | None | Streams downloadable CSV file of all registered tags |
+| `/api/settings` | `POST` | `require_registration` | Configures system policies (1 = reject unknown, 0 = allow) |
+
+---
+
+## Repository File Structure
+
+```text
+ESP32-RFID-Attendance-System/
+├── .gitignore                                  # Git exclusion list (build artifacts, temp files)
+├── LICENSE                                     # MIT Open-Source License
+├── README.md                                   # Comprehensive documentation & hardware guide
+├── API_DOCUMENTATION.md                        # Full REST API specification & Android guide
+├── ESP32_RFID_Attendance/
+│   └── ESP32_RFID_Attendance.ino               # Complete standalone firmware sketch
+├── assets/
+│   └── attendance_terminal_enclosure_concept.jpg # Hardware enclosure 3D concept render
+├── web_preview/
+│   └── test_page.html                          # Interactive browser preview for UI styling/testing
+└── tools/
+    └── upload_to_esp32.bat                     # Quick one-click command-line upload script
+```
 
 ---
 
 ## Troubleshooting & Diagnostics
 
-1. **Serial Monitor shows `[RFID WARNING] Reader communication failed! Version: 0x00 or 0xFF`:**
-   - Check your wiring connections. Loose jumper wires are the most common cause.
-   - Confirm **VCC** is connected to **3V3** (not 5V).
-   - Verify MISO is on GPIO 19, MOSI on GPIO 23, SCK on GPIO 18, and SDA/SS on GPIO 5.
+### 1. Serial Monitor Shows `Reader communication failed! Version: 0x00 or 0xFF`
+- Verify wiring connections. Loose jumper wires are the most frequent cause.
+- **VCC MUST be connected to 3.3V.** Connecting to 5V can fry the RC522 chip.
+- Double-check SPI pins: MISO = GPIO 19, MOSI = GPIO 23, SCK = GPIO 18, SDA/SS = GPIO 5, RST = GPIO 4.
 
-2. **Captive portal doesn't pop up automatically on phone:**
-   - Some phones require you to open your mobile browser and navigate directly to `http://192.168.4.1`.
-   - Make sure mobile data is temporarily toggled off if your phone tries to use 4G/5G instead of local Wi-Fi.
+### 2. Captive Portal Doesn't Automatically Appear on Phone
+- Some Android/iOS devices require tapping the "Sign in to network" notification.
+- If your phone has cellular data enabled, temporarily turn mobile data off so your browser does not route requests through 4G/5G.
+- Manually open Chrome, Safari, or Edge and go to `http://192.168.4.1`.
 
-3. **Card tap is rejected / ignored during attendance:**
-   - Check if the session is **ON**. Attendance is only recorded when the session is active.
-   - If **Strict Registration Mode** is enabled in Settings, the card must first be registered in the **Register Tag** tab.
-   - If the card was already tapped in this direction, it is acknowledged as a duplicate and kept as a single entry.
+### 3. LCD Screen Displays Black Boxes or No Text
+- Adjust the blue potentiometer on the back of the I2C backpack using a small screwdriver to set display contrast.
+- Ensure the LCD is powered from **VIN / 5V** (3.3V is insufficient for standard HD44780 LCD contrast).
 
-4. **Time resets after powering off:**
-   - Because there is no hardware coin-battery RTC module, this is normal behavior. Simply click **⚡ Sync Phone Time** when you power up the device and connect.
+### 4. Card Tap Ignored / Access Denied
+- Ensure the attendance session is **ACTIVE** (click Start Session).
+- If **Strict Registration Mode** is enabled in Settings, the card must first be enrolled under the Register Tag tab.
+- If the card was already scanned in this direction, it is flagged as duplicate to preserve clean data.
+
+### 5. Time Resets After Reboot
+- Because the system uses software RTC rather than a coin-cell battery module, time initializes to unset after a cold restart.
+- Simply click **⚡ Sync Device Time** in the web dashboard upon powering on.
+
+---
+
+## License
+
+This project is open-source and released under the [MIT License](LICENSE). Feel free to use, modify, and distribute for educational, personal, or commercial purposes.
