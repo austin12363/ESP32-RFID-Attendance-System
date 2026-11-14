@@ -56,7 +56,7 @@ fun DashboardScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                 ) {
                     Column {
                         Text(
-                            text = "RC522 STANDALONE TERMINAL",
+                            text = "LIVE TERMINAL",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Black,
                             letterSpacing = 1.2.sp,

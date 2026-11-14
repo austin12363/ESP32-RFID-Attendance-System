@@ -201,7 +201,7 @@ fun CardsScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (!uiState.isRegistering) {
                         Text(
-                            "Enter attendee info, then tap the physical card on the ESP32 RC522 scanner.",
+                            "Enter attendee info, then tap the physical card on the scanner.",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
@@ -242,7 +242,7 @@ fun CardsScreen(viewModel: AttendanceViewModel, uiState: UiState) {
                                     CircularProgressIndicator(modifier = Modifier.size(36.dp), color = primaryColor)
                                     Spacer(Modifier.height(14.dp))
                                     Text("Waiting for physical card tap...", fontWeight = FontWeight.Black)
-                                    Text("Bring RFID tag close to RC522 module", fontSize = 11.sp, color = Color.Gray)
+                                    Text("Hold RFID tag near the scanner", fontSize = 11.sp, color = Color.Gray)
                                 } else if (regState?.state == "success" || regState?.state == "same_card") {
                                     Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF059669), modifier = Modifier.size(44.dp))
                                     Spacer(Modifier.height(8.dp))
