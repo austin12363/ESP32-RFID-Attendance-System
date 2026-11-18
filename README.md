@@ -133,6 +133,5 @@ ESP32-RFID-Attendance-System/
 
 ## 📜 License
 
-This repository is dual-licensed:
-* **Firmware & Software (`ESP32_RFID_Attendance/`):** Licensed under the **[MIT License](LICENSE)** (permissive, open for developer use).
-* **Hardware & 3D Models (`Hardware_KiCad/`, `CAD_Models/`):** Licensed under **[Creative Commons CC BY-NC 4.0](LICENSE)** (free for personal and academic use; commercial manufacturing or resale requires written permission).
+* **Firmware:** [MIT](LICENSE)
+* **Hardware & 3D Models:** [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)
