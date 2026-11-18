@@ -1,4 +1,4 @@
-# ESP32 Standalone RFID Attendance System - KiCad Hardware Project (v1.3)
+# ESP32 Standalone RFID Attendance System - KiCad Hardware Project (v2.0)
 
 This directory contains the complete, production-ready **KiCad 10 / 9 / 8** schematic files, circuit design documentation, bill of materials (BOM), and assembly instructions for the **ESP32 Standalone RFID Attendance System**.
 
@@ -10,32 +10,34 @@ This directory contains the complete, production-ready **KiCad 10 / 9 / 8** sche
 | :--- | :--- |
 | [`ESP32_Attendance_System.kicad_pro`](./ESP32_Attendance_System.kicad_pro) | Native KiCad Project File |
 | [`ESP32_Attendance_System.kicad_sch`](./ESP32_Attendance_System.kicad_sch) | Complete KiCad Schematic (Self-contained symbols, nets, and designators) |
-| [`ESP32_Attendance_System_Schematic_v1.3.pdf`](./ESP32_Attendance_System_Schematic_v1.3.pdf) | High-Resolution Vector Schematic Sheet (v1.3) |
+| [`ESP32_Attendance_System_Schematic_v2.0.pdf`](./ESP32_Attendance_System_Schematic_v2.0.pdf) | High-Resolution Vector Schematic Sheet (v2.0) |
 | [`ESP32_Attendance_System.svg`](./ESP32_Attendance_System.svg) | Scalable Vector Graphics (SVG) Schematic Drawing |
 | [`ESP32_Attendance_System_Schematic.png`](./ESP32_Attendance_System_Schematic.png) | 300 DPI Raster Schematic Preview |
 | [`generate_kicad_project.py`](../generate_kicad_project.py) | Standalone Python builder script to re-generate/export all schematic artifacts |
 
 ---
 
-## Power Subsystem Routing (v1.2)
+## Power Subsystem Routing (v2.0 — MH-CD42 Integrated Architecture)
+
+The system replaces the legacy dual-board setup (TP4056 + MT3608) with a single **MH-CD42** integrated power module (featuring synchronous 5V 2.1A step-up boost + lithium battery management):
 
 ```text
-[18650 Battery (3.7V)] 
-         │ 
-         ▼ (B+ / B-)
-[TP4056 Protection Module] ─── OUT- ─────────────────────────────► System GND & MT3608 VIN-
-         │ OUT+ (Protected 3.7V)
-         ▼
-[Main SPST Switch (SW1)]
-         │ 
-         ▼ (VIN+)
-[MT3608 Boost Converter] (Calibrated to exactly 5.00V DC)
-         │ 
-         ├───────────────────────────────────────────────────────► +5V Rail (ESP32 VIN Pin 30, LCD VCC Pin 2)
-         └───────────────────────────────────────────────────────► System GND (ESP32 GND Pin 2 & 29, LCD GND)
+[External 5V USB] ───► VIN / GND_IN ───┐
+                                       │
+[18650 Battery (3.7V)] ──► BAT+ / BAT- ──► [MH-CD42 Integrated Module]
+                                              │ (Pass-through + Synchronous Boost)
+                                              ├─ VOUT (5.0V) ──► [Main Switch SW1] ──► +5V Rail (ESP32 VIN & LCD VCC)
+                                              ├─ GND_OUT ─────────────────────────────► System GND Rail
+                                              └─ KEY (Unconnected / Auto-wake)
 
-[ESP32 Internal 3.3V LDO] (Pin 1 3V3) ──────────────────────────► +3V3 Rail (RC522 Pin 1 VCC, RGB Pin 2 Anode)
+[ESP32 Internal 3.3V LDO] (Pin 1 3V3) ───────────────────────────────────────────────► +3V3 Rail (RC522 Pin 1 VCC, RGB Pin 2 Anode)
 ```
+
+### Advantages of MH-CD42 over TP4056 + MT3608:
+1. **Single Compact Module:** Replaces two separate PCBs, eliminating interconnect wires and reducing enclosure space by over 50%.
+2. **Synchronous Rectification:** Higher efficiency (up to 96%) with lower heat dissipation compared to MT3608 asynchronous diode boost.
+3. **Pass-Through Power Path:** The module simultaneously charges the 18650 battery via `VIN` and supplies 5V to `VOUT`.
+4. **Isolating Main Switch (`SW1`):** Placed on `VOUT` so toggling `SW1` OFF completely powers down the ESP32 and peripherals while still allowing the 18650 battery to recharge safely via USB.
 
 ---
 
@@ -79,7 +81,7 @@ This directory contains the complete, production-ready **KiCad 10 / 9 / 8** sche
 | **27** | `D12 / GPIO 12` | *NC* | No Connection | HSPI MISO (Strapping: MTDI) |
 | **28** | `D13 / GPIO 13` | *NC* | No Connection | HSPI MOSI |
 | **29** | `GND` | `GND` | Common Ground | System Ground Return |
-| **30** | `VIN(5V)` | `+5V` | MT3608 `VOUT+` (+5.0V Boost Output) | Main 5V Power Input |
+| **30** | `VIN(5V)` | `+5V` | MH-CD42 `VOUT` (via Main Switch `SW1`) | Main 5V Power Input |
 
 ---
 

@@ -702,42 +702,34 @@ void updateLcdIdle() {
     return;
   }
 
-  if (isSettingsOpen) {
+  if (sessionActive) {
+    // During active attendance: Normally show TAP CARD HERE, but every 12s show Wi-Fi info for 3s if enabled
+    unsigned long activeStep = (millis() / 3000) % 4;
+    if (showLcdWifiGuide && activeStep == 3) {
+      lcd.setCursor(0, 0);
+      lcd.print(centerText(currentApSsid));
+      lcd.setCursor(0, 1);
+      String passStr = (currentApPass.length() > 0) ? ("Pass: " + currentApPass) : "(NO PASSWORD)";
+      if (passStr.length() > 16) passStr = currentApPass;
+      lcd.print(centerText(passStr));
+    } else {
+      String modeStr = (sessionType == "Exit") ? "OUT" : "IN ";
+      String timeStr = isTimeSet ? getLcdTime12h() : "--:--";
+      String r0 = " [" + modeStr + "] " + timeStr + " ";
+      String r1 = " TAP CARD HERE  ";
+
+      lcd.setCursor(0, 0);
+      lcd.print(centerText(r0));
+      lcd.setCursor(0, 1);
+      lcd.print(centerText(r1));
+    }
+    return;
+  } else if (isSettingsOpen) {
     lcd.setCursor(0, 0);
     lcd.print(centerText("SETTINGS OPEN"));
     lcd.setCursor(0, 1);
-    lcd.print(centerText("SCANNING PAUSED"));
+    lcd.print(centerText("192.168.4.1"));
     return;
-  }
-
-  if (sessionActive) {
-    if (isSettingsOpen) {
-      lcd.setCursor(0, 0);
-      lcd.print(centerText("SETTINGS OPEN"));
-      lcd.setCursor(0, 1);
-      lcd.print(centerText("SCANNING PAUSED"));
-    } else {
-      // During active attendance: Normally show TAP CARD HERE, but every 12s show Wi-Fi info for 3s if enabled
-      unsigned long activeStep = (millis() / 3000) % 4;
-      if (showLcdWifiGuide && activeStep == 3) {
-        lcd.setCursor(0, 0);
-        lcd.print(centerText(currentApSsid));
-        lcd.setCursor(0, 1);
-        String passStr = (currentApPass.length() > 0) ? ("Pass: " + currentApPass) : "(NO PASSWORD)";
-        if (passStr.length() > 16) passStr = currentApPass;
-        lcd.print(centerText(passStr));
-      } else {
-        String modeStr = (sessionType == "Exit") ? "OUT" : "IN ";
-        String timeStr = isTimeSet ? getLcdTime12h() : "--:--";
-        String r0 = " [" + modeStr + "] " + timeStr + " ";
-        String r1 = " TAP CARD HERE  ";
-
-        lcd.setCursor(0, 0);
-        lcd.print(centerText(r0));
-        lcd.setCursor(0, 1);
-        lcd.print(centerText(r1));
-      }
-    }
   } else {
     // Standby Mode (Session Inactive): Guide user to connect to Wi-Fi with SSID & Password if enabled
     if (showLcdWifiGuide) {
@@ -1072,18 +1064,7 @@ void loadHistoryIndex() {
     }
   }
   f.close();
-  while (sessionHistory.size() > 5) {
-    SavedSessionItem oldest = sessionHistory.back();
-    String oldPath = "/" + oldest.id + ".txt";
-    if (LittleFS.exists(oldPath.c_str())) {
-      LittleFS.remove(oldPath.c_str());
-    } else {
-      oldPath = oldest.id + ".txt";
-      if (LittleFS.exists(oldPath.c_str())) LittleFS.remove(oldPath.c_str());
-    }
-    sessionHistory.pop_back();
-  }
-  Serial.printf("[LITTLEFS] Loaded %d sessions from history index (max 5 enforced).\n", sessionHistory.size());
+  Serial.printf("[LITTLEFS] Loaded %d sessions from history index.\n", sessionHistory.size());
 }
 
 void saveHistoryIndex() {
@@ -1189,8 +1170,8 @@ String saveCurrentSessionToHistory() {
     // Insert newest at top
     sessionHistory.insert(sessionHistory.begin(), item);
 
-    // Enforce strict limit of 5 saved sessions: overwrite/delete oldest from flash
-    while (sessionHistory.size() > 5) {
+    // Dynamic flash storage: only purge oldest session if flash storage is critically low (< 16 KB)
+    while (sessionHistory.size() > 1 && LittleFS.totalBytes() > 0 && (LittleFS.totalBytes() - LittleFS.usedBytes() < 16384)) {
       SavedSessionItem oldest = sessionHistory.back();
       String oldPath = "/" + oldest.id + ".txt";
       if (LittleFS.exists(oldPath.c_str())) {
@@ -1200,7 +1181,7 @@ String saveCurrentSessionToHistory() {
         if (LittleFS.exists(oldPath.c_str())) LittleFS.remove(oldPath.c_str());
       }
       sessionHistory.pop_back();
-      Serial.printf("[LITTLEFS] Session history limit (5) reached. Overwrote oldest session '%s' (ID: %s)\n",
+      Serial.printf("[LITTLEFS] Low flash space safeguard: Purged oldest session '%s' (ID: %s)\n",
                     oldest.title.c_str(), oldest.id.c_str());
     }
   }
@@ -1603,8 +1584,8 @@ to{width:0%;}
 .search-box .icon-sm{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--md-sys-color-on-surface-variant);fill:currentColor;}
 .table-wrapper{flex:1;overflow-y:auto;overflow-x:auto;border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-shape-corner-medium);background:var(--md-sys-color-surface-container);-webkit-overflow-scrolling:touch;}
 table.console-table{width:100%;border-collapse:collapse;text-align:left;font-size:0.8125rem;color:var(--md-sys-color-on-surface);}
-table.console-table th{position:sticky;top:0;background:var(--md-sys-color-surface-container-high);padding:8px 10px;color:var(--md-sys-color-on-surface-variant);font-weight:600;font-size:0.72rem;letter-spacing:0.2px;text-transform:uppercase;border-bottom:1px solid var(--md-sys-color-outline-variant);white-space:nowrap;z-index:2;}
-table.console-table td{padding:8px 10px;border-bottom:1px solid var(--md-sys-color-outline-variant);white-space:nowrap;color:var(--md-sys-color-on-surface);}
+table.console-table th{position:sticky;top:0;background:var(--md-sys-color-surface-container-high);padding:8px 10px;color:var(--md-sys-color-on-surface-variant);font-weight:600;font-size:0.72rem;letter-spacing:0.2px;text-transform:uppercase;border-bottom:1px solid var(--md-sys-color-outline-variant);white-space:nowrap;z-index:2;vertical-align:middle;}
+table.console-table td{padding:8px 10px;border-bottom:1px solid var(--md-sys-color-outline-variant);white-space:nowrap;color:var(--md-sys-color-on-surface);vertical-align:middle;}
 table.console-table tr:hover td{background:var(--md-sys-color-surface-container-high);}
 table.console-table tr:last-child td{border-bottom:none;}
 .badge{display:inline-flex;align-items:center;padding:2px 6px;border-radius:var(--md-shape-corner-small);font-size:0.68rem;font-weight:600;}
@@ -1658,27 +1639,33 @@ body.modal-open{position:fixed !important;inset:0 !important;width:100% !importa
 .history-detail-toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;}
 .history-detail-actions{display:flex;gap:6px;align-items:center;flex-wrap:nowrap;}
 .session-history-card{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--md-sys-color-outline-variant);border-radius:10px;background:var(--md-sys-color-surface);margin-bottom:0;}
-.session-card-header{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;}
-.session-card-title{font-size:0.95rem;font-weight:700;color:var(--md-sys-color-on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:110px;}
+.session-card-header{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;}
+.session-card-title{font-size:0.95rem;font-weight:700;color:var(--md-sys-color-on-surface);word-break:break-word;flex:1;}
 .session-card-badges{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;}
-.session-card-footer{display:flex;justify-content:space-between;align-items:center;gap:8px;}
-.session-card-time{font-size:0.78rem;color:var(--md-sys-color-on-surface-variant);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.session-card-footer{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:2px;}
+.session-card-time{font-size:0.78rem;color:var(--md-sys-color-on-surface-variant);white-space:nowrap;flex-shrink:0;}
 .session-card-btn-group{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;}
 .session-card-btn-group .card-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;}
 .session-card-btn-group .card-btn-delete{width:32px;height:32px;min-width:32px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--md-sys-color-outline-variant);background:transparent;}
 .badge-late{background:var(--md-sys-color-error-container);color:var(--md-sys-color-error);font-weight:700;}
 @media (max-width:640px){
-  .history-back-btn .btn-text{display:none;}
+  .session-card-header{flex-direction:column;align-items:flex-start;gap:6px;}
+  .session-card-title{width:100%;font-size:0.95rem;font-weight:700;white-space:normal;word-break:break-word;}
+  .session-card-badges{width:100%;}
+  .session-card-footer{flex-direction:row;justify-content:space-between;align-items:center;width:100%;}
+  .session-card-time{font-size:0.75rem;white-space:nowrap;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+  .history-back-btn .btn-text{display:none !important;}
   .history-back-btn{padding:0 !important;width:34px !important;height:34px !important;min-width:34px !important;justify-content:center !important;border-radius:8px !important;}
-  .mobile-icon-btn .btn-text{display:none;}
+  .mobile-icon-btn .btn-text{display:none !important;}
   .mobile-icon-btn{padding:0 !important;width:34px !important;height:34px !important;min-width:34px !important;justify-content:center !important;border-radius:8px !important;}
   .mobile-icon-btn .icon-sm, .history-back-btn .icon-sm{width:17px;height:17px;margin:0;}
-  .history-action-btn .btn-text{display:none;}
+  .history-action-btn .btn-text{display:none !important;}
   .history-action-btn{padding:0 !important;width:34px !important;height:34px !important;min-width:34px !important;justify-content:center !important;border-radius:8px !important;}
   .history-action-btn .icon-sm{width:17px;height:17px;margin:0;}
-  .session-card-btn-group .card-btn .btn-text{display:none;}
-  .session-card-btn-group .card-btn{padding:0 !important;width:32px !important;height:32px !important;min-width:32px !important;border-radius:8px !important;justify-content:center !important;}
-  .session-card-btn-group .card-btn .icon-sm{margin:0;width:16px;height:16px;}
+  .session-card-btn-group .card-btn .btn-text{display:none !important;}
+  .session-card-btn-group .card-btn{padding:0 !important;width:34px !important;height:34px !important;min-width:34px !important;border-radius:8px !important;justify-content:center !important;}
+  .session-card-btn-group .card-btn .icon-sm{margin:0;width:17px;height:17px;}
+  .session-card-btn-group .card-btn-delete{width:34px !important;height:34px !important;min-width:34px !important;border-radius:8px !important;}
 }
 .mobile-only-btn{display:none;}
 .mobile-only-text{display:none;}
@@ -2271,7 +2258,7 @@ body.modal-open{position:fixed !important;inset:0 !important;width:100% !importa
                     <th>Mode</th>
                     <th>Date &amp; Time</th>
                     <th>Attendees</th>
-                    <th style="width: 120px; text-align: center;">Actions</th>
+                    <th style="width: 230px; min-width: 230px; text-align: center;">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="historyTableBody">
@@ -2731,7 +2718,7 @@ Maria C. Santos, 2024-002, EF:56:78:90"></textarea>
               <span id="notionCardsEstCapacity" style="font-weight: 700; color: var(--md-sys-color-primary);">--</span>
             </div>
             <div class="notion-setting-row">
-              <span class="notion-row-label">Saved Sessions (Max 5)</span>
+              <span class="notion-row-label">Saved Sessions</span>
               <span id="notionHistoryTotalText">--</span>
             </div>
           </div>
@@ -3118,11 +3105,18 @@ window.toggleSessionMode = async function() {
 };
 
 window.clearAttendanceLog = async function() {
-  if (!confirm('Reset current attendance log?')) return;
+  if (!confirm('Reset current attendance log?\n\nThis will clear all recorded attendees from the active session.')) return;
   try {
     const res = await fetch('/api/session/clear', { method: 'POST' });
     const data = await res.json();
-    window.loadAttendanceLog();
+    allAttendeesData = [];
+    const searchInput = document.getElementById('attendanceSearch');
+    if (searchInput) searchInput.value = '';
+    window.renderAttendanceTable([]);
+    window.updateAttendanceStats([]);
+    window.setSessionSavedState(false);
+    await window.loadAttendanceLog();
+    await window.pollStatus();
   } catch(e) {
     alert('Network error: ' + e);
   }
@@ -3374,7 +3368,7 @@ window.renderHistoryList = function(sessions) {
         </div>
       </div>
       <div class="session-card-footer">
-        <span class="mono-txt session-card-time">${window.escapeHtml(s.date)} • ${window.formatTime12h(s.save_time)}</span>
+        <span class="mono-txt session-card-time">${window.escapeHtml(s.date)} &bull; ${window.formatTime12h(s.save_time)}</span>
         <div class="session-card-btn-group">
           <button class="btn btn-primary btn-sm card-btn" onclick="resumeSessionFromList('${window.escapeHtml(s.id)}')" title="Continue Session">
             <svg class="icon-sm" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -3401,12 +3395,12 @@ window.renderHistoryList = function(sessions) {
       <td>${modeBadge}</td>
       <td class="mono-txt" style="font-size: 0.8125rem;">${window.escapeHtml(s.date)} ${window.formatTime12h(s.save_time)}</td>
       <td><span class="badge badge-done">${count} Attendees</span></td>
-      <td style="text-align: center;">
-        <div style="display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: center;">
-          <button class="btn btn-primary btn-sm" onclick="resumeSessionFromList('${window.escapeHtml(s.id)}')">Continue</button>
-          <button class="btn btn-tonal btn-sm" onclick="viewSessionDetail('${window.escapeHtml(s.id)}')">View</button>
-          <a href="/api/history/export.csv?id=${encodeURIComponent(s.id)}" download="${window.escapeHtml(safeTitle)}.csv" class="btn btn-outlined btn-sm">CSV</a>
-          <button class="icon-btn" onclick="deleteHistorySession('${window.escapeHtml(s.id)}')" title="Delete" style="color: var(--md-sys-color-error); width: 28px; height: 28px;">
+      <td style="text-align: center; white-space: nowrap;">
+        <div style="display: inline-flex; gap: 6px; flex-wrap: nowrap; align-items: center; justify-content: center; white-space: nowrap;">
+          <button class="btn btn-primary btn-sm" onclick="resumeSessionFromList('${window.escapeHtml(s.id)}')" title="Continue Session">Continue</button>
+          <button class="btn btn-tonal btn-sm" onclick="viewSessionDetail('${window.escapeHtml(s.id)}')" title="View Attendees">View</button>
+          <a href="/api/history/export.csv?id=${encodeURIComponent(s.id)}" download="${window.escapeHtml(safeTitle)}.csv" class="btn btn-outlined btn-sm" title="Export CSV">CSV</a>
+          <button class="icon-btn" onclick="deleteHistorySession('${window.escapeHtml(s.id)}')" title="Delete Session" style="color: var(--md-sys-color-error); width: 28px; height: 28px; border-radius: 6px;">
             <svg class="icon-sm" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
           </button>
         </div>
@@ -3894,6 +3888,8 @@ window.closeSettingsModal = function() {
   document.body.classList.remove('modal-open');
   if (modal) modal.classList.remove('active');
   window.notifyModalState();
+  window.loadAttendanceLog();
+  window.pollStatus();
 };
 
 window.openHistoryModal = function() {
@@ -4946,11 +4942,13 @@ window.clearAllCards = async function() {
 window.loadAttendanceLog = async function() {
   try {
     const res = await fetch('/api/attendance');
+    if (!res.ok) return;
     const data = await res.json();
-    if (Array.isArray(data) && (data.length > 0 || allAttendeesData.length === 0)) {
+    if (Array.isArray(data)) {
       allAttendeesData = data;
     }
-    const q = document.getElementById('attendanceSearch').value.trim();
+    const searchInput = document.getElementById('attendanceSearch');
+    const q = searchInput ? searchInput.value.trim() : '';
     if (q) window.filterAttendanceTable();
     else window.renderAttendanceTable(allAttendeesData);
     window.updateAttendanceStats(allAttendeesData);
@@ -5034,6 +5032,9 @@ window.pollStatus = async function() {
     const consoleScreen = document.getElementById('consoleScreen');
 
     if (d.session_active) {
+      if (d.attendance_count !== undefined && d.attendance_count !== allAttendeesData.length) {
+        window.loadAttendanceLog();
+      }
       entranceScreen.style.display = 'none';
       consoleScreen.style.display = 'flex';
       const titleEl = document.getElementById('activeTitleLabel');
@@ -5117,7 +5118,7 @@ window.pollStatus = async function() {
     const cardsTotal = document.getElementById('notionCardsTotalText');
     if (cardsTotal && d.registered_count !== undefined) cardsTotal.innerText = `${d.registered_count} cards registered`;
     const histTotal = document.getElementById('notionHistoryTotalText');
-    if (histTotal && d.history_count !== undefined) histTotal.innerText = `${d.history_count} / 5 sessions`;
+    if (histTotal && d.history_count !== undefined) histTotal.innerText = `${d.history_count} sessions`;
     const uptimeText = document.getElementById('notionUptimeText');
     if (uptimeText && d.uptime_sec !== undefined) {
       const uH = Math.floor(d.uptime_sec / 3600);
@@ -5239,18 +5240,53 @@ window.pollStatus = async function() {
       const isTimeModalOpen = document.getElementById('timeModal')?.classList.contains('active');
       const isFirstBootOpen = document.getElementById('firstBootModal')?.classList.contains('active');
       const isHistoryOpen = document.getElementById('historyModal')?.classList.contains('active');
-      const isConsoleVisible = (consoleScreen.style.display === 'flex');
+      const anyModalOpen = Boolean(isSettingsOpen || isTimeModal || isFirstBootOpen || isHistoryOpen);
+      const isConsoleVisible = (consoleScreen && consoleScreen.style.display === 'flex');
+
+      // Unconditionally sync attendance log whenever ANY scan happens in active session!
+      if (d.session_active) {
+        window.loadAttendanceLog();
+      }
 
       const isSingleRegActive = document.getElementById('notion-reg-single')?.classList.contains('active');
       const inlineStatus = document.getElementById('regStatusCard');
 
       if (d.last_scan.type === 'Registration') {
         window.loadCardsDatabase();
-      } else if (d.session_active && isConsoleVisible && !isSettingsOpen && !isTimeModalOpen && !isFirstBootOpen && !isHistoryOpen) {
+      } else if (d.session_active && isConsoleVisible && !anyModalOpen) {
         window.handleNewScan(d.last_scan);
       }
     }
   } catch(e) {}
+};
+
+window.optimisticAddAttendee = function(scan, type) {
+  if (!scan || !scan.uid || scan.is_duplicate) return;
+  const existing = allAttendeesData.find(r => r.uid && r.uid.toLowerCase() === scan.uid.toLowerCase());
+  const scanTime = window.formatTime12h(scan.time);
+  if (existing) {
+    if (type === 'Exit') {
+      existing.time_out = scanTime;
+      existing.status = (existing.time_in && existing.time_in !== '--') ? 'Completed' : 'Checked Out';
+    } else {
+      existing.time_in = scanTime;
+      existing.status = (type === 'Late') ? 'Late' : 'Checked In';
+    }
+  } else {
+    allAttendeesData.push({
+      index: allAttendeesData.length + 1,
+      name: scan.name,
+      student_id: '',
+      uid: scan.uid,
+      time_in: (type === 'Exit') ? '--' : scanTime,
+      time_out: (type === 'Exit') ? scanTime : '--',
+      status: (type === 'Late') ? 'Late' : ((type === 'Exit') ? 'Checked Out' : 'Checked In')
+    });
+  }
+  const q = document.getElementById('attendanceSearch')?.value.trim();
+  if (q) window.filterAttendanceTable();
+  else window.renderAttendanceTable(allAttendeesData);
+  window.updateAttendanceStats(allAttendeesData);
 };
 
 window.showIdleTapPrompt = function() {
@@ -5300,6 +5336,7 @@ window.handleNewScan = function(scan) {
     subEl.innerText = `Recorded at ${timeStr} \u2022 Late Entrance`;
     metaEl.innerText = `Card UID: ${scan.uid}`;
     window.playAudioTone('alert');
+    window.optimisticAddAttendee(scan, 'Late');
     window.loadAttendanceLog();
   } else if (scan.type === 'Entrance' || scan.type === 'Exit') {
     fullCard.className = 'rfid-panel-fullcard theme-success';
@@ -5308,6 +5345,7 @@ window.handleNewScan = function(scan) {
     subEl.innerText = `Recorded at ${timeStr} \u2022 ${scan.type}`;
     metaEl.innerText = `Card UID: ${scan.uid}`;
     window.playAudioTone('success');
+    window.optimisticAddAttendee(scan, scan.type);
     window.loadAttendanceLog();
   } else if (scan.type === 'Registration') {
     fullCard.className = 'rfid-panel-fullcard theme-success';
@@ -5376,11 +5414,34 @@ window.addEventListener('DOMContentLoaded', () => {
   window.loadAttendanceLog();
 
   let pollTimer = null;
+  let isPollingBusy = false;
   function scheduleNextPoll() {
-    const isModalOpen = document.getElementById('settingsModal')?.classList.contains('active');
-    const delay = isModalOpen ? 1500 : 850;
+    const isModalOpen = Boolean(
+      document.getElementById('settingsModal')?.classList.contains('active') ||
+      document.getElementById('historyModal')?.classList.contains('active') ||
+      document.getElementById('timeModal')?.classList.contains('active') ||
+      document.getElementById('firstBootModal')?.classList.contains('active')
+    );
+    const isConsole = (document.getElementById('consoleScreen')?.style.display === 'flex');
+
+    // High-responsiveness adaptive rate:
+    // Active session on console screen: 180ms ultra-fast response for instant card tap feedback!
+    // Inside modal/settings: 1200ms relaxed rate to save network traffic
+    // On entrance screen: 450ms balanced rate
+    let delay = 450;
+    if (isModalOpen) delay = 1200;
+    else if (isConsole) delay = 180;
+
     pollTimer = setTimeout(async () => {
-      await window.pollStatus();
+      if (!isPollingBusy) {
+        isPollingBusy = true;
+        try {
+          await window.pollStatus();
+        } catch(e) {
+        } finally {
+          isPollingBusy = false;
+        }
+      }
       scheduleNextPoll();
     }, delay);
   }
@@ -5436,20 +5497,26 @@ void handleStatus() {
   json += "\"history_count\":" + String(sessionHistory.size()) + ",";
   json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
   json += "\"total_heap\":" + String(ESP.getHeapSize()) + ",";
-  size_t fsUsedBytes = LittleFS.usedBytes();
-  size_t fsTotalBytes = LittleFS.totalBytes();
-  if (fsTotalBytes == 0) {
-    // If LittleFS filesystem not mounted or reports 0, query flash partition table directly
-    const esp_partition_t* part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
-    if (!part) part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "spiffs");
-    if (!part) part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, NULL);
-    if (!part) part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_LITTLEFS, NULL);
-    if (part) {
-      fsTotalBytes = part->size;
+  // High-performance LittleFS metrics caching to ensure sub-millisecond status polling
+  static unsigned long lastFsQueryMillis = 0;
+  static size_t cachedFsUsed = 0;
+  static size_t cachedFsTotal = 0;
+  if (cachedFsTotal == 0 || millis() - lastFsQueryMillis > 20000) {
+    lastFsQueryMillis = millis();
+    cachedFsUsed = LittleFS.usedBytes();
+    size_t tot = LittleFS.totalBytes();
+    if (tot == 0) {
+      const esp_partition_t* part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+      if (!part) part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "spiffs");
+      if (!part) part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, NULL);
+      if (!part) part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_LITTLEFS, NULL);
+      cachedFsTotal = part ? part->size : 1966080;
     } else {
-      fsTotalBytes = 1966080; // 1.875 MB (2MB No-OTA SPIFFS/LittleFS partition)
+      cachedFsTotal = tot;
     }
   }
+  size_t fsUsedBytes = cachedFsUsed;
+  size_t fsTotalBytes = cachedFsTotal;
   size_t fsFreeBytes = (fsTotalBytes > fsUsedBytes) ? (fsTotalBytes - fsUsedBytes) : 0;
   size_t estCardsCap = fsFreeBytes / 96;
   json += "\"fs_used\":" + String(fsUsedBytes) + ",";
@@ -6853,10 +6920,10 @@ void loop() {
 
   // ---------------------------------------------------------------------------
   // SMART RFID SCANNING GUARD:
-  // Attendance is strictly recorded ONLY when session is ACTIVE and NOT in settings.
+  // Attendance is strictly recorded whenever session is ACTIVE.
   // Card registration is allowed ONLY when actively waiting for a card tap (regState == REG_WAITING)!
   // ---------------------------------------------------------------------------
-  bool canScanAttendance = sessionActive && !isSettingsOpen;
+  bool canScanAttendance = sessionActive;
   bool canScanRegistration = (regState == REG_WAITING);
 
   if (!canScanAttendance && !canScanRegistration) {
@@ -6953,7 +7020,7 @@ void loop() {
   // ---------------------------------------------------------------------------
   // CASE B: ATTENDANCE SESSION CHECK (Safety fallback)
   // ---------------------------------------------------------------------------
-  if (!sessionActive || isSettingsOpen) {
+  if (!sessionActive) {
     return;
   }
 
