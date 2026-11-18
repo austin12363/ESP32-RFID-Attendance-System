@@ -4,7 +4,8 @@
 [![Arduino IDE](https://img.shields.io/badge/IDE-Arduino%202.x-00979C.svg)](https://www.arduino.cc/)
 [![KiCad](https://img.shields.io/badge/Hardware-KiCad%20v2.0-314CB0.svg)](Hardware_KiCad/)
 [![Autodesk Inventor](https://img.shields.io/badge/CAD-Inventor%20%2B%20STL-E51937.svg)](CAD_Models/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Code: MIT](https://img.shields.io/badge/Firmware-MIT-green.svg)](LICENSE)
+[![Hardware: CC BY--NC 4.0](https://img.shields.io/badge/Hardware-CC%20BY--NC%204.0-orange.svg)](LICENSE)
 
 A standalone, battery-powered RFID attendance terminal built with an **ESP32**, **MFRC522 RFID reader**, **16x2 I2C LCD**, and a **Tricolor RGB LED**. 
 
@@ -85,8 +86,6 @@ ESP32-RFID-Attendance-System/
 ├── assets/                       # Images & schematics for documentation
 │   ├── attendance_terminal_enclosure_concept.jpg
 │   └── schematic_overall.png
-├── tools/                        # Utilities
-│   └── upload_to_esp32.bat       # Quick upload script
 ├── .gitignore
 ├── LICENSE
 └── README.md
@@ -134,4 +133,6 @@ ESP32-RFID-Attendance-System/
 
 ## 📜 License
 
-This project is licensed under the [MIT License](LICENSE).
+This repository is dual-licensed:
+* **Firmware & Software (`ESP32_RFID_Attendance/`):** Licensed under the **[MIT License](LICENSE)** (permissive, open for developer use).
+* **Hardware & 3D Models (`Hardware_KiCad/`, `CAD_Models/`):** Licensed under **[Creative Commons CC BY-NC 4.0](LICENSE)** (free for personal and academic use; commercial manufacturing or resale requires written permission).

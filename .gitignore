@@ -20,6 +20,7 @@ tools/*.py
 # Scratch & Temporary Files
 scratch/
 **/scratch/
+assets/diagrams/
 *.tmp
 *.bak
 *.log
