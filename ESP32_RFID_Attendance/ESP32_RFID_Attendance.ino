@@ -98,9 +98,10 @@ bool lcdManualSleep = false; // When true, manual screen sleep is active until w
 // -----------------------------------------------------------------------------
 // Wi-Fi Access Point & Captive Portal Configuration
 // -----------------------------------------------------------------------------
-const char* AP_SSID = "ESP32-Attendance";
-String currentApPass = "12345678"; // Active Wi-Fi password for current boot
-String nextApPass = "12345678";    // Wi-Fi password queued to apply on next boot
+String currentApSsid = "ESP32-Attendance"; // Active Wi-Fi SSID for current boot
+String nextApSsid = "ESP32-Attendance";    // Wi-Fi SSID queued to apply on next boot
+String currentApPass = "12345678";         // Active Wi-Fi password for current boot (or "" if open)
+String nextApPass = "12345678";            // Wi-Fi password queued to apply on next boot (or "" if open)
 const byte  DNS_PORT = 53;
 const IPAddress AP_IP(192, 168, 4, 1);
 const IPAddress AP_NETMASK(255, 255, 255, 0);
@@ -127,8 +128,13 @@ struct SavedSessionItem {
   String dateStr;
   String saveTime;
   int attendeeCount;
+  int graceMinutes;
 };
 std::vector<SavedSessionItem> sessionHistory;
+String lastSavedSessionId = "";
+String activeResumedSessionId = "";
+bool isLcdInIdleState = false;
+const uint8_t LCD_MIN_IDLE_PWM = 20;
 
 struct AttendanceRecord {
   String uid;
@@ -138,6 +144,7 @@ struct AttendanceRecord {
   String outTime;
   time_t inTimestamp;
   time_t outTimestamp;
+  String status;
 };
 
 struct LastScan {
@@ -162,6 +169,7 @@ bool sessionActive = false;
 String sessionType = "Entrance"; // "Entrance" or "Exit"
 String sessionTitle = "General Session";
 time_t sessionStartTime = 0;
+int sessionGraceMinutes = 0;  // Grace period in minutes from session start; 0 = disabled (no late rule)
 bool requireRegistration = true; // Reject unknown cards if true
 bool isSettingsOpen = false; // True when Settings/Modal is open on client
 bool isRegistrationTab = false; // True when user is actively in single/batch card registration
@@ -171,9 +179,9 @@ RegState regState = REG_IDLE;
 
 enum RgbFeedbackType {
   RGB_FEEDBACK_NONE,
-  RGB_FEEDBACK_RECORDED,         // Green: Recorded attendance or new tag registration (1.5s)
-  RGB_FEEDBACK_DUPLICATE,        // Yellow: Duplicate / repeated card tap (1.5s)
-  RGB_FEEDBACK_REJECTED,         // Red: Unregistered / Denied / Conflict (1.5s)
+  RGB_FEEDBACK_RECORDED,         // Smooth Green: Recorded attendance or new tag registration (1.5s)
+  RGB_FEEDBACK_DUPLICATE,        // Smooth Yellow: Duplicate / repeated card tap (1.5s)
+  RGB_FEEDBACK_REJECTED,         // Smooth Red: Unregistered / Denied / Conflict (1.5s)
   RGB_FEEDBACK_WHITE_BLINK_TEST  // White blink test (1.5s)
 };
 String regCandidateName = "";
@@ -397,6 +405,7 @@ bool initLcd() {
   applyLcdPwm(lcdActiveBrightness);
 
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.setClock(400000); // 400 kHz Fast Mode I2C for PCF8574 backpack (75% faster line writes)
   delay(50);
 
   // Scan common I2C LCD backpack addresses (PCF8574: 0x20-0x27, PCF8574A: 0x38-0x3F)
@@ -454,6 +463,7 @@ void applyLcdPwm(uint8_t pwm) {
 
 void wakeLcd() {
   lcdManualSleep = false;
+  isLcdInIdleState = false;
   lastLcdActivity = millis();
   lcdIsDimmed = false;
   applyLcdPwm(lcdActiveBrightness);
@@ -515,18 +525,22 @@ void checkLcdStandbyTimeout() {
 
   unsigned long elapsed = millis() - lastLcdActivity;
   if (elapsed >= lcdStandbyTimeoutMs) {
-    // Screen OFF: Standby timeout elapsed
-    if (lcdBacklightOn || currentLcdPwm > 0) {
+    // Standby / IDLE state reached:
+    // Backlight set to MINIMUM brightness (faint glow, not completely turned off)
+    if (!isLcdInIdleState || currentLcdPwm != LCD_MIN_IDLE_PWM) {
+      isLcdInIdleState = true;
       lcdIsDimmed = false;
-      applyLcdPwm(0);
+      lcdBacklightOn = true;
       if (lcdAvailable) {
-        lcd.noBacklight();
-        lcd.clear();
-        lcdBacklightOn = false;
+        lcd.backlight();
       }
-      Serial.println("[LCD] Standby timeout reached -> Backlight turned OFF to save power.");
+      applyLcdPwm(LCD_MIN_IDLE_PWM);
+      Serial.println("[LCD] Standby timeout reached -> Switched to IDLE STATE (minimum backlight).");
     }
   } else {
+    if (isLcdInIdleState) {
+      isLcdInIdleState = false;
+    }
     // Check pre-sleep screen dimming warning
     unsigned long effectiveDimMs = (lcdDimDurationMs < lcdStandbyTimeoutMs) ? lcdDimDurationMs : (lcdStandbyTimeoutMs / 2);
     if (effectiveDimMs > 0 && elapsed >= (lcdStandbyTimeoutMs - effectiveDimMs)) {
@@ -552,10 +566,10 @@ void checkLcdStandbyTimeout() {
 }
 
 
-void showLcdAttendance(const String& direction, const String& attendeeName) {
+void showLcdAttendance(const String& direction, const String& attendeeName, const String& status = "") {
   wakeLcd();
   if (!lcdAvailable) return;
-  String row0Text = (direction == "Exit") ? "TIME OUT" : "TIME IN";
+  String row0Text = (direction == "Exit") ? "TIME OUT" : (status == "LATE" ? "TIME IN (LATE)" : "TIME IN");
   String row1Text = formatLcdName(attendeeName);
 
   lcd.clear();
@@ -668,6 +682,14 @@ void updateLcdIdle() {
   if (millis() - lastLcdIdleUpdate < 1000) return; // Refresh once per second
   lastLcdIdleUpdate = millis();
 
+  if (isLcdInIdleState) {
+    lcd.setCursor(0, 0);
+    lcd.print(centerText("IDLE STATE"));
+    lcd.setCursor(0, 1);
+    lcd.print(centerText(isTimeSet ? getLcdTime12h() : "SYSTEM READY"));
+    return;
+  }
+
   if (regState == REG_WAITING) {
     lcd.setCursor(0, 0);
     if (regBatchInfo.length() > 0) {
@@ -680,11 +702,11 @@ void updateLcdIdle() {
     return;
   }
 
-  if (isRegistrationTab) {
+  if (isSettingsOpen) {
     lcd.setCursor(0, 0);
-    lcd.print(centerText("CARD REGISTRATION"));
+    lcd.print(centerText("SETTINGS OPEN"));
     lcd.setCursor(0, 1);
-    lcd.print(centerText("READY TO SCAN"));
+    lcd.print(centerText("SCANNING PAUSED"));
     return;
   }
 
@@ -699,10 +721,10 @@ void updateLcdIdle() {
       unsigned long activeStep = (millis() / 3000) % 4;
       if (showLcdWifiGuide && activeStep == 3) {
         lcd.setCursor(0, 0);
-        lcd.print(centerText(String(AP_SSID)));
+        lcd.print(centerText(currentApSsid));
         lcd.setCursor(0, 1);
         String passStr = (currentApPass.length() > 0) ? ("Pass: " + currentApPass) : "(NO PASSWORD)";
-        if (passStr.length() > 16 && currentApPass.length() > 0) passStr = currentApPass;
+        if (passStr.length() > 16) passStr = currentApPass;
         lcd.print(centerText(passStr));
       } else {
         String modeStr = (sessionType == "Exit") ? "OUT" : "IN ";
@@ -725,14 +747,14 @@ void updateLcdIdle() {
         lcd.setCursor(0, 0);
         lcd.print(centerText("CONNECT TO WIFI:"));
         lcd.setCursor(0, 1);
-        lcd.print(centerText(String(AP_SSID)));
+        lcd.print(centerText(currentApSsid));
       } else if (step == 1) {
         // Slide 1: Exact Wi-Fi SSID and Password together
         lcd.setCursor(0, 0);
-        lcd.print(centerText(String(AP_SSID)));
+        lcd.print(centerText(currentApSsid));
         lcd.setCursor(0, 1);
         String passStr = (currentApPass.length() > 0) ? ("Pass: " + currentApPass) : "(NO PASSWORD)";
-        if (passStr.length() > 16 && currentApPass.length() > 0) passStr = currentApPass;
+        if (passStr.length() > 16) passStr = currentApPass;
         lcd.print(centerText(passStr));
       } else if (step == 2) {
         // Slide 2: Web portal URL
@@ -819,62 +841,163 @@ void initRgbLed() {
   turnOffRgbLed();
 }
 
+void hsvToRgb(float h, float s, float v, uint8_t &r, uint8_t &g, uint8_t &b) {
+  if (s <= 0.0f) {
+    r = g = b = (uint8_t)roundf(v * 255.0f);
+    return;
+  }
+  while (h < 0.0f) h += 360.0f;
+  while (h >= 360.0f) h -= 360.0f;
+
+  float c = v * s;
+  float h_sector = h / 60.0f;
+  float x = c * (1.0f - fabsf(fmodf(h_sector, 2.0f) - 1.0f));
+  float m = v - c;
+
+  float r1 = 0, g1 = 0, b1 = 0;
+  if (h_sector < 1.0f) {
+    r1 = c; g1 = x; b1 = 0;
+  } else if (h_sector < 2.0f) {
+    r1 = x; g1 = c; b1 = 0;
+  } else if (h_sector < 3.0f) {
+    r1 = 0; g1 = c; b1 = x;
+  } else if (h_sector < 4.0f) {
+    r1 = 0; g1 = x; b1 = c;
+  } else if (h_sector < 5.0f) {
+    r1 = x; g1 = 0; b1 = c;
+  } else {
+    r1 = c; g1 = 0; b1 = x;
+  }
+
+  r = (uint8_t)roundf((r1 + m) * 255.0f);
+  g = (uint8_t)roundf((g1 + m) * 255.0f);
+  b = (uint8_t)roundf((b1 + m) * 255.0f);
+}
+
+const unsigned long RAINBOW_CYCLE_MS = 10000; // Calibrated 10.0s period for smooth, calm ambient rainbow cycle
+
+void runRainbowLoop() {
+  unsigned long now = millis();
+  float hue = (float)(now % RAINBOW_CYCLE_MS) * 360.0f / (float)RAINBOW_CYCLE_MS;
+  uint8_t r, g, b;
+  hsvToRgb(hue, 1.0f, 1.0f, r, g, b);
+  setRgbColorWithLimit(r, g, b, RGB_PWM_MAX_LIMIT);
+}
+
 void updateRgbLed() {
   unsigned long now = millis();
+  static unsigned long lastBreatheTime = 0;
+  static uint8_t lastBreathePwm = 255;
 
-  // 1. Priority 1: Card Tap / Status Feedback in Session
-  // Lights up solid for 1.5s with status color, then turns OFF right after
+  // 1. Priority 1: Card Tap / Status Feedback (Session Scans & Registration Results)
+  // Smoothly transitions into status color (Green/Yellow/Red), holds, and smoothly fades out
   if (currentRgbFeedback != RGB_FEEDBACK_NONE) {
     unsigned long elapsed = now - rgbFeedbackStartMillis;
     if (elapsed >= RGB_FEEDBACK_DURATION_MS) {
       currentRgbFeedback = RGB_FEEDBACK_NONE;
       turnOffRgbLed();
+      lastBreathePwm = 255;
     } else {
+      // Smooth sinusoidal envelope:
+      // 0 - 250ms: Smooth ease-in (0.0 -> 1.0)
+      // 250 - 1200ms: Sustain at peak (1.0)
+      // 1200 - 1500ms: Smooth ease-out (1.0 -> 0.0)
+      float factor = 1.0f;
+      if (elapsed < 250) {
+        float t = (float)elapsed / 250.0f;
+        factor = 0.5f * (1.0f - cosf(t * 3.14159265f));
+      } else if (elapsed > 1200) {
+        float t = (float)(elapsed - 1200) / 300.0f;
+        factor = 0.5f * (1.0f + cosf(t * 3.14159265f));
+      }
+
       if (currentRgbFeedback == RGB_FEEDBACK_RECORDED) {
-        // Solid Green: Recorded entrance, exit, or tag registration
-        setRgbColor(0, 255, 0);
+        // Smooth Green: Recorded attendance or successful card registration
+        uint8_t g = (uint8_t)roundf(255.0f * factor);
+        setRgbColor(0, g, 0);
       } else if (currentRgbFeedback == RGB_FEEDBACK_DUPLICATE) {
-        // Solid Yellow: Repeated card tap
-        setRgbColor(255, 200, 0);
+        // Smooth Yellow: Repeated card tap
+        uint8_t r = (uint8_t)roundf(255.0f * factor);
+        uint8_t g = (uint8_t)roundf(200.0f * factor);
+        setRgbColor(r, g, 0);
       } else if (currentRgbFeedback == RGB_FEEDBACK_REJECTED) {
-        // Solid Red: Unregistered / Denied / Conflict
-        setRgbColor(255, 0, 0);
+        // Smooth Red: Unregistered card / denied / registration conflict
+        uint8_t r = (uint8_t)roundf(255.0f * factor);
+        setRgbColor(r, 0, 0);
       } else if (currentRgbFeedback == RGB_FEEDBACK_WHITE_BLINK_TEST) {
-        // Solid White test (capped at 128 PWM)
-        setRgbColorWithLimit(255, 255, 255, RGB_WHITE_BLINK_PWM_LIMIT);
+        // Smooth White test
+        uint8_t w = (uint8_t)roundf((float)RGB_WHITE_BLINK_PWM_LIMIT * factor);
+        setRgbColorWithLimit(255, 255, 255, w);
       }
       return;
     }
   }
 
-  // 2. Priority 2: Standby Sleep (When LCD is asleep from inactivity)
-  bool isSleeping = (lcdStandbyTimeoutMs > 0 && (now - lastLcdActivity >= lcdStandbyTimeoutMs)) || !lcdBacklightOn;
-  if (isSleeping) {
+  // 2. Priority 2: Manual Sleep (Screen explicitly powered off via web UI)
+  if (lcdManualSleep) {
     turnOffRgbLed();
+    lastBreathePwm = 255;
     return;
   }
 
-  // 3. Priority 3: When in session (Normally OFF; lights up only when a card is read)
+  // 3. Priority 3: Idle State (Standby timeout reached -> faint glow backlight & "IDLE STATE")
+  // User Requirement: "also in the idle state- long white breathing but low brightness of LED"
+  if (isLcdInIdleState) {
+    if (now - lastBreatheTime < 20) return;
+    lastBreatheTime = now;
+
+    const unsigned long IDLE_BREATHE_CYCLE_MS = 4500; // 4.5s calm slow breathing
+    float phase = (float)(now % IDLE_BREATHE_CYCLE_MS) / (float)IDLE_BREATHE_CYCLE_MS;
+    float breathFactor = 0.5f * (1.0f - cosf(phase * 2.0f * 3.14159265f));
+    breathFactor = breathFactor * breathFactor;
+
+    // Very gentle, subtle low-glow white breathing (capped at 14 PWM, ~5% duty)
+    const uint8_t IDLE_BREATHE_MAX_PWM = 14;
+    uint8_t currentBreathePwm = (uint8_t)roundf(breathFactor * (float)IDLE_BREATHE_MAX_PWM);
+    if (currentBreathePwm != lastBreathePwm) {
+      setRgbColorWithLimit(255, 255, 255, currentBreathePwm);
+      lastBreathePwm = currentBreathePwm;
+    }
+    return;
+  }
+
+  // 4. Priority 4: Settings & Card Registration Mode
+  // User Requirement: "add- a long breathing white light in the settings"
+  // "in the card or tag registration have interrupt the long breathing white and smoothly transitions to green or red..."
+  if (isSettingsOpen || regState == REG_WAITING) {
+    if (now - lastBreatheTime < 20) return;
+    lastBreatheTime = now;
+
+    const unsigned long SETTINGS_BREATHE_CYCLE_MS = 4000; // 4.0s long white breathing
+    float phase = (float)(now % SETTINGS_BREATHE_CYCLE_MS) / (float)SETTINGS_BREATHE_CYCLE_MS;
+    float breathFactor = 0.5f * (1.0f - cosf(phase * 2.0f * 3.14159265f));
+    breathFactor = breathFactor * breathFactor;
+
+    // Comfortable white breathing for settings (capped at 54 PWM, ~21% duty)
+    const uint8_t SETTINGS_BREATHE_MAX_PWM = 54;
+    uint8_t effectiveMax = (uint8_t)(((uint32_t)rgbActiveBrightness * SETTINGS_BREATHE_MAX_PWM) / RGB_PWM_MAX_LIMIT);
+    if (effectiveMax < 10) effectiveMax = 10;
+
+    uint8_t currentBreathePwm = (uint8_t)roundf(breathFactor * (float)effectiveMax);
+    if (currentBreathePwm != lastBreathePwm) {
+      setRgbColorWithLimit(255, 255, 255, currentBreathePwm);
+      lastBreathePwm = currentBreathePwm;
+    }
+    return;
+  }
+
+  // 5. Priority 5: Active Attendance Session
+  // User Requirement: "the session of attendance, LED status indicator: I didnt mean to have it loop in all colors, I just want it to smoothly show the status as they are scanned"
   if (sessionActive) {
-    turnOffRgbLed();
+    turnOffRgbLed(); // Normally OFF during session; smoothly indicates status when a card is scanned
+    lastBreathePwm = 255;
     return;
   }
 
-  // 4. Priority 4: Out of session (Smooth white breathing animation in low brightness)
-  const unsigned long BREATH_CYCLE_MS = 2800; // 2.8s calm human breathing period
-  float phase = (float)(now % BREATH_CYCLE_MS) / (float)BREATH_CYCLE_MS; // 0.0 to 1.0
-  // Smooth cosine easing: 0.0 -> 1.0 -> 0.0
-  float breathFactor = 0.5f * (1.0f - cosf(phase * 2.0f * 3.14159265f));
-  // Quadratic curve matching human eye perception
-  breathFactor = breathFactor * breathFactor;
-
-  // Soft low brightness ceiling (capped at 36 PWM, ~14% duty)
-  const uint8_t WHITE_BREATHE_MAX_PWM = 36;
-  uint8_t effectiveMax = (uint8_t)(((uint32_t)rgbActiveBrightness * WHITE_BREATHE_MAX_PWM) / RGB_PWM_MAX_LIMIT);
-  if (effectiveMax < 8) effectiveMax = 8;
-
-  uint8_t currentBreathePwm = (uint8_t)roundf(breathFactor * (float)effectiveMax);
-  setRgbColorWithLimit(255, 255, 255, currentBreathePwm);
+  // 6. Priority 6: Out of Session State
+  // User Requirement: "also move the rainbow color to the out of session state"
+  runRainbowLoop();
+  lastBreathePwm = 255;
 }
 
 // -----------------------------------------------------------------------------
@@ -899,20 +1022,27 @@ String formatUID(MFRC522::Uid *uid) {
 // -----------------------------------------------------------------------------
 void loadHistoryIndex() {
   sessionHistory.clear();
-  if (!LittleFS.exists("/history_idx.txt")) {
+  String idxPath = "/history_idx.txt";
+  if (!LittleFS.exists(idxPath.c_str())) {
+    idxPath = "history_idx.txt";
+  }
+  if (!LittleFS.exists(idxPath.c_str())) {
     return;
   }
-  File f = LittleFS.open("/history_idx.txt", "r");
+  File f = LittleFS.open(idxPath.c_str(), "r");
   if (!f) return;
   while (f.available()) {
     String line = f.readStringUntil('\n');
     line.trim();
     if (line.length() == 0) continue;
-    int t1 = line.indexOf('\t');
-    int t2 = line.indexOf('\t', t1 + 1);
-    int t3 = line.indexOf('\t', t2 + 1);
-    int t4 = line.indexOf('\t', t3 + 1);
-    int t5 = line.indexOf('\t', t4 + 1);
+    char delim = '\t';
+    if (line.indexOf('\t') == -1 && line.indexOf(',') != -1) delim = ',';
+    int t1 = line.indexOf(delim);
+    int t2 = line.indexOf(delim, t1 + 1);
+    int t3 = line.indexOf(delim, t2 + 1);
+    int t4 = line.indexOf(delim, t3 + 1);
+    int t5 = line.indexOf(delim, t4 + 1);
+    int t6 = (t5 != -1) ? line.indexOf(delim, t5 + 1) : -1;
     if (t1 != -1 && t2 != -1 && t3 != -1 && t4 != -1) {
       SavedSessionItem item;
       item.id = line.substring(0, t1);
@@ -921,11 +1051,23 @@ void loadHistoryIndex() {
       item.dateStr = line.substring(t3 + 1, t4);
       if (t5 != -1) {
         item.saveTime = line.substring(t4 + 1, t5);
-        item.attendeeCount = line.substring(t5 + 1).toInt();
+        if (t6 != -1) {
+          item.attendeeCount = line.substring(t5 + 1, t6).toInt();
+          item.graceMinutes = line.substring(t6 + 1).toInt();
+        } else {
+          item.attendeeCount = line.substring(t5 + 1).toInt();
+          item.graceMinutes = 0;
+        }
       } else {
         item.saveTime = line.substring(t4 + 1);
         item.attendeeCount = 0;
+        item.graceMinutes = 0;
       }
+      item.id.trim();
+      item.title.trim();
+      item.type.trim();
+      item.dateStr.trim();
+      item.saveTime.trim();
       sessionHistory.push_back(item);
     }
   }
@@ -935,6 +1077,9 @@ void loadHistoryIndex() {
     String oldPath = "/" + oldest.id + ".txt";
     if (LittleFS.exists(oldPath.c_str())) {
       LittleFS.remove(oldPath.c_str());
+    } else {
+      oldPath = oldest.id + ".txt";
+      if (LittleFS.exists(oldPath.c_str())) LittleFS.remove(oldPath.c_str());
     }
     sessionHistory.pop_back();
   }
@@ -944,80 +1089,138 @@ void loadHistoryIndex() {
 void saveHistoryIndex() {
   File f = LittleFS.open("/history_idx.txt", "w");
   if (!f) {
+    f = LittleFS.open("history_idx.txt", "w");
+  }
+  if (!f) {
     Serial.println("[LITTLEFS] Failed to open /history_idx.txt for writing");
     return;
   }
   for (const auto& item : sessionHistory) {
-    f.printf("%s\t%s\t%s\t%s\t%s\t%d\n",
+    f.printf("%s\t%s\t%s\t%s\t%s\t%d\t%d\n",
              sanitizeField(item.id).c_str(),
              sanitizeField(item.title).c_str(),
              sanitizeField(item.type).c_str(),
              sanitizeField(item.dateStr).c_str(),
              sanitizeField(item.saveTime).c_str(),
-             item.attendeeCount);
+             item.attendeeCount,
+             item.graceMinutes);
   }
+  f.flush();
   f.close();
 }
 
 String saveCurrentSessionToHistory() {
-  String id = "sess_" + String((unsigned long)time(nullptr)) + "_" + String(millis() % 1000);
+  String id;
+  bool isUpdate = false;
+  SavedSessionItem* existingItem = nullptr;
+
+  if (activeResumedSessionId.length() > 0) {
+    for (auto& s : sessionHistory) {
+      if (s.id == activeResumedSessionId) {
+        existingItem = &s;
+        id = activeResumedSessionId;
+        isUpdate = true;
+        break;
+      }
+    }
+  }
+
+  if (!isUpdate) {
+    id = "sess_" + String((unsigned long)time(nullptr)) + "_" + String(millis() % 1000);
+  }
+
   String dStr = isTimeSet ? getCurrentTimeString().substring(0, 10) : "Undated";
   String sTime = getCurrentTime12h();
 
-  SavedSessionItem item;
-  item.id = id;
-  item.title = sessionTitle.length() > 0 ? sessionTitle : "General Session";
-  item.type = sessionType;
-  item.dateStr = dStr;
-  item.saveTime = sTime;
-  item.attendeeCount = attendanceRecords.size();
+  // Save session records to individual file using direct stream writes (avoiding printf buffer allocations)
+  String cleanId = id;
+  if (cleanId.startsWith("/")) cleanId = cleanId.substring(1);
+  String p1 = "/" + cleanId + ".txt";
+  String p2 = cleanId + ".txt";
+  File f = LittleFS.open(p1.c_str(), "w");
+  if (!f) f = LittleFS.open(p2.c_str(), "w");
 
-  // Save session records to individual file
-  String path = "/" + id + ".txt";
-  File f = LittleFS.open(path.c_str(), "w");
   if (f) {
     for (const auto& r : attendanceRecords) {
       String status = "Checked In";
-      if (r.inTime.length() > 0 && r.inTime != "--" && r.outTime.length() > 0 && r.outTime != "--") status = "Completed";
+      if (r.status.length() > 0) status = r.status;
+      else if (r.inTime.length() > 0 && r.inTime != "--" && r.outTime.length() > 0 && r.outTime != "--") status = "Completed";
       else if (r.outTime.length() > 0 && r.outTime != "--") status = "Checked Out";
 
-      f.printf("%s\t%s\t%s\t%s\t%s\t%s\n",
-               sanitizeField(r.name).c_str(),
-               sanitizeField(r.studentId).c_str(),
-               sanitizeField(r.uid).c_str(),
-               sanitizeField(r.inTime).c_str(),
-               sanitizeField(r.outTime).c_str(),
-               sanitizeField(status).c_str());
+      f.print(sanitizeField(r.name));
+      f.print('\t');
+      f.print(sanitizeField(r.studentId));
+      f.print('\t');
+      f.print(sanitizeField(r.uid));
+      f.print('\t');
+      f.print(sanitizeField(r.inTime));
+      f.print('\t');
+      f.print(sanitizeField(r.outTime));
+      f.print('\t');
+      f.println(status);
     }
+    f.flush();
     f.close();
+    Serial.printf("[LITTLEFS] Successfully saved %d records to %s\n", (int)attendanceRecords.size(), p1.c_str());
+  } else {
+    Serial.printf("[LITTLEFS] ERROR: Could not open %s or %s for writing!\n", p1.c_str(), p2.c_str());
   }
 
-  // Insert newest at top
-  sessionHistory.insert(sessionHistory.begin(), item);
+  lastSavedSessionId = id;
+  activeResumedSessionId = id;
 
-  // Enforce strict limit of 5 saved sessions: overwrite/delete oldest from flash
-  while (sessionHistory.size() > 5) {
-    SavedSessionItem oldest = sessionHistory.back();
-    String oldPath = "/" + oldest.id + ".txt";
-    if (LittleFS.exists(oldPath.c_str())) {
-      LittleFS.remove(oldPath.c_str());
+  if (isUpdate && existingItem != nullptr) {
+    existingItem->title = sessionTitle.length() > 0 ? sessionTitle : "General Session";
+    existingItem->type = sessionType;
+    existingItem->dateStr = dStr;
+    existingItem->saveTime = sTime;
+    existingItem->attendeeCount = attendanceRecords.size();
+    existingItem->graceMinutes = sessionGraceMinutes;
+  } else {
+    SavedSessionItem item;
+    item.id = id;
+    item.title = sessionTitle.length() > 0 ? sessionTitle : "General Session";
+    item.type = sessionType;
+    item.dateStr = dStr;
+    item.saveTime = sTime;
+    item.attendeeCount = attendanceRecords.size();
+    item.graceMinutes = sessionGraceMinutes;
+
+    // Insert newest at top
+    sessionHistory.insert(sessionHistory.begin(), item);
+
+    // Enforce strict limit of 5 saved sessions: overwrite/delete oldest from flash
+    while (sessionHistory.size() > 5) {
+      SavedSessionItem oldest = sessionHistory.back();
+      String oldPath = "/" + oldest.id + ".txt";
+      if (LittleFS.exists(oldPath.c_str())) {
+        LittleFS.remove(oldPath.c_str());
+      } else {
+        oldPath = oldest.id + ".txt";
+        if (LittleFS.exists(oldPath.c_str())) LittleFS.remove(oldPath.c_str());
+      }
+      sessionHistory.pop_back();
+      Serial.printf("[LITTLEFS] Session history limit (5) reached. Overwrote oldest session '%s' (ID: %s)\n",
+                    oldest.title.c_str(), oldest.id.c_str());
     }
-    sessionHistory.pop_back();
-    Serial.printf("[LITTLEFS] Session history limit (5) reached. Overwrote oldest session '%s' (ID: %s)\n",
-                  oldest.title.c_str(), oldest.id.c_str());
   }
 
   saveHistoryIndex();
-  Serial.printf("[LITTLEFS] Saved session '%s' with %d attendees (ID: %s)\n", item.title.c_str(), item.attendeeCount, id.c_str());
+  Serial.printf("[LITTLEFS] Saved session '%s' with %d attendees (ID: %s)\n",
+                sessionTitle.c_str(), (int)attendanceRecords.size(), id.c_str());
   return id;
 }
 
 void loadRegisteredCards() {
   registeredCards.clear();
 
-  // 1. Primary: Load from LittleFS file (/cards.txt)
-  if (LittleFS.exists("/cards.txt")) {
-    File f = LittleFS.open("/cards.txt", "r");
+  // 1. Primary: Load from LittleFS file (/cards.txt or cards.txt)
+  String path = "/cards.txt";
+  if (!LittleFS.exists(path.c_str())) {
+    path = "cards.txt";
+  }
+  if (LittleFS.exists(path.c_str())) {
+    File f = LittleFS.open(path.c_str(), "r");
     if (f) {
       while (f.available()) {
         String entry = f.readStringUntil('\n');
@@ -1041,56 +1244,85 @@ void loadRegisteredCards() {
           } else {
             c.name = entry.substring(t1 + 1);
           }
+          c.uid.trim();
+          c.name.trim();
+          c.studentId.trim();
+          c.regDate.trim();
           registeredCards.push_back(c);
         }
       }
       f.close();
-      Serial.printf("[LITTLEFS] Loaded %d registered cards from /cards.txt\n", registeredCards.size());
-      return;
+      Serial.printf("[LITTLEFS] Loaded %d registered cards from %s\n", (int)registeredCards.size(), path.c_str());
     }
   }
 
-  // 2. Fallback / Migration: Load from NVS Preferences if /cards.txt does not exist yet
-  prefs.begin("rfid_att", true);
-  int count = prefs.getInt("count", 0);
-  for (int i = 0; i < count; i++) {
-    String key = "c" + String(i);
-    String entry = prefs.getString(key.c_str(), "");
-    if (entry.length() > 0) {
-      int t1 = entry.indexOf('\t');
-      int t2 = entry.indexOf('\t', t1 + 1);
-      int t3 = entry.indexOf('\t', t2 + 1);
-      if (t1 != -1) {
-        RegisteredCard c;
-        c.uid = entry.substring(0, t1);
-        if (t2 != -1) {
-          c.name = entry.substring(t1 + 1, t2);
-          if (t3 != -1) {
-            c.studentId = entry.substring(t2 + 1, t3);
-            c.regDate = entry.substring(t3 + 1);
+  // 2. Dual-Layer Fallback: If LittleFS was empty or not mounted, load from NVS flash partition
+  if (registeredCards.empty()) {
+    prefs.begin("rfid_att", true);
+    int count = prefs.getInt("count", 0);
+    for (int i = 0; i < count; i++) {
+      String key = "c" + String(i);
+      String entry = prefs.getString(key.c_str(), "");
+      if (entry.length() > 0) {
+        int t1 = entry.indexOf('\t');
+        int t2 = entry.indexOf('\t', t1 + 1);
+        int t3 = entry.indexOf('\t', t2 + 1);
+        if (t1 != -1) {
+          RegisteredCard c;
+          c.uid = entry.substring(0, t1);
+          if (t2 != -1) {
+            c.name = entry.substring(t1 + 1, t2);
+            if (t3 != -1) {
+              c.studentId = entry.substring(t2 + 1, t3);
+              c.regDate = entry.substring(t3 + 1);
+            } else {
+              c.studentId = entry.substring(t2 + 1);
+              c.regDate = "";
+            }
           } else {
-            c.studentId = entry.substring(t2 + 1);
-            c.regDate = "";
+            c.name = entry.substring(t1 + 1);
           }
-        } else {
-          c.name = entry.substring(t1 + 1);
+          c.uid.trim();
+          c.name.trim();
+          c.studentId.trim();
+          c.regDate.trim();
+          registeredCards.push_back(c);
         }
-        registeredCards.push_back(c);
       }
     }
-  }
-  prefs.end();
-  Serial.printf("[NVS] Loaded %d registered cards from flash.\n", registeredCards.size());
-
-  // Automatically migrate existing NVS cards into LittleFS
-  if (registeredCards.size() > 0) {
-    saveRegisteredCards();
+    prefs.end();
+    if (registeredCards.size() > 0) {
+      Serial.printf("[NVS] Loaded %d registered cards from NVS backup.\n", (int)registeredCards.size());
+      // Re-sync recovered NVS cards to LittleFS
+      String outPath = "/cards.txt";
+      File fOut = LittleFS.open(outPath.c_str(), "w");
+      if (!fOut) {
+        outPath = "cards.txt";
+        fOut = LittleFS.open(outPath.c_str(), "w");
+      }
+      if (fOut) {
+        for (size_t i = 0; i < registeredCards.size(); i++) {
+          fOut.printf("%s\t%s\t%s\t%s\n",
+                     sanitizeField(registeredCards[i].uid).c_str(),
+                     sanitizeField(registeredCards[i].name).c_str(),
+                     sanitizeField(registeredCards[i].studentId).c_str(),
+                     sanitizeField(registeredCards[i].regDate).c_str());
+        }
+        fOut.flush();
+        fOut.close();
+      }
+    }
   }
 }
 
 void saveRegisteredCards() {
-  // Save to LittleFS /cards.txt (supports thousands of cards!)
-  File f = LittleFS.open("/cards.txt", "w");
+  // 1. Save to LittleFS with dual path fallback and explicit buffer flush
+  String path = "/cards.txt";
+  File f = LittleFS.open(path.c_str(), "w");
+  if (!f) {
+    path = "cards.txt";
+    f = LittleFS.open(path.c_str(), "w");
+  }
   if (f) {
     for (size_t i = 0; i < registeredCards.size(); i++) {
       f.printf("%s\t%s\t%s\t%s\n",
@@ -1099,51 +1331,50 @@ void saveRegisteredCards() {
                sanitizeField(registeredCards[i].studentId).c_str(),
                sanitizeField(registeredCards[i].regDate).c_str());
     }
+    f.flush();
     f.close();
-    Serial.printf("[LITTLEFS] Saved %d registered cards to /cards.txt\n", registeredCards.size());
+    Serial.printf("[LITTLEFS] Saved %d registered cards to %s\n", (int)registeredCards.size(), path.c_str());
   } else {
-    Serial.println("[LITTLEFS ERROR] Failed to write /cards.txt");
+    Serial.println("[LITTLEFS ERROR] Failed to write /cards.txt or cards.txt");
   }
 
-  // Also maintain NVS backup (first 100 cards) for backward compatibility
+  // 2. Dual-Layer Persistence: Also save to NVS flash partition
   prefs.begin("rfid_att", false);
   prefs.clear();
-  int nvsCount = (registeredCards.size() > 100) ? 100 : registeredCards.size();
-  prefs.putInt("count", nvsCount);
-  for (int i = 0; i < nvsCount; i++) {
+  prefs.putInt("count", registeredCards.size());
+  for (size_t i = 0; i < registeredCards.size(); i++) {
     String key = "c" + String(i);
-    String entry = sanitizeField(registeredCards[i].uid) + "\t" + 
-                   sanitizeField(registeredCards[i].name) + "\t" + 
-                   sanitizeField(registeredCards[i].studentId) + "\t" + 
+    String entry = sanitizeField(registeredCards[i].uid) + "\t" +
+                   sanitizeField(registeredCards[i].name) + "\t" +
+                   sanitizeField(registeredCards[i].studentId) + "\t" +
                    sanitizeField(registeredCards[i].regDate);
     prefs.putString(key.c_str(), entry);
   }
   prefs.end();
+  Serial.printf("[NVS] Synced %d registered cards to NVS flash.\n", (int)registeredCards.size());
+}
+
+const RegisteredCard* findRegisteredCard(const String& uid) {
+  for (const auto& card : registeredCards) {
+    if (card.uid.equalsIgnoreCase(uid)) {
+      return &card;
+    }
+  }
+  return nullptr;
 }
 
 String lookupOwnerName(const String& uid) {
-  for (const auto& card : registeredCards) {
-    if (card.uid.equalsIgnoreCase(uid)) {
-      return card.name;
-    }
-  }
-  return "Unregistered Tag (" + uid + ")";
+  const RegisteredCard* c = findRegisteredCard(uid);
+  return c ? c->name : ("Unregistered Tag (" + uid + ")");
 }
 
 String lookupOwnerId(const String& uid) {
-  for (const auto& card : registeredCards) {
-    if (card.uid.equalsIgnoreCase(uid)) {
-      return card.studentId;
-    }
-  }
-  return "";
+  const RegisteredCard* c = findRegisteredCard(uid);
+  return c ? c->studentId : "";
 }
 
 bool isCardRegistered(const String& uid) {
-  for (const auto& card : registeredCards) {
-    if (card.uid.equalsIgnoreCase(uid)) return true;
-  }
-  return false;
+  return findRegisteredCard(uid) != nullptr;
 }
 
 // -----------------------------------------------------------------------------
@@ -1161,17 +1392,33 @@ void loadSystemSettings() {
   rgbActiveBrightness = prefs.getUChar("rgb_bright", 168);
   if (rgbActiveBrightness > RGB_PWM_MAX_LIMIT) rgbActiveBrightness = RGB_PWM_MAX_LIMIT;
   currentLcdPwm = lcdActiveBrightness;
-  // Apply password saved for next boot as active Wi-Fi password for this boot
-  currentApPass = prefs.getString("next_wifi_pass", "12345678");
+  // Apply SSID and password saved for next boot as active Wi-Fi credentials for this boot
+  currentApSsid = prefs.getString("next_ssid", "ESP32-Attendance");
+  if (currentApSsid.length() == 0) currentApSsid = "ESP32-Attendance";
+  nextApSsid = currentApSsid;
+
+  // Strict initial password enforcement: Default to "12345678" unless wifi_open flag is explicitly TRUE
+  bool wifiOpen = prefs.getBool("wifi_open", false);
+  if (wifiOpen) {
+    currentApPass = "";
+  } else {
+    currentApPass = prefs.getString("next_wifi_pass", "12345678");
+    if (currentApPass.length() != 8) {
+      currentApPass = "12345678"; // Reset corrupted/empty value to initial "12345678"
+    }
+  }
   nextApPass = currentApPass;
   prefs.end();
 
-  // Keep next_wifi_pass in sync in NVS
+  // Keep next_ssid, next_wifi_pass and wifi_open in sync in NVS
   prefs.begin("rfid_sys", false);
+  prefs.putString("next_ssid", currentApSsid);
   prefs.putString("next_wifi_pass", currentApPass);
+  prefs.putBool("wifi_open", wifiOpen);
   prefs.end();
-  Serial.printf("[SETTINGS] NVS Loaded: Wi-Fi Pass: '%s', LCD Guide: %s, LCD Timeout: %lu ms, Brightness: %u, Dim Duration: %lu ms\n",
-                currentApPass.c_str(), showLcdWifiGuide ? "ON" : "OFF", lcdStandbyTimeoutMs, lcdActiveBrightness, lcdDimDurationMs);
+  Serial.printf("[SETTINGS] NVS Loaded: Wi-Fi SSID: '%s', Pass: '%s' (Open: %s), LCD Guide: %s, LCD Timeout: %lu ms, Brightness: %u, Dim Duration: %lu ms\n",
+                currentApSsid.c_str(), currentApPass.length() > 0 ? currentApPass.c_str() : "<None>", wifiOpen ? "YES" : "NO",
+                showLcdWifiGuide ? "ON" : "OFF", lcdStandbyTimeoutMs, lcdActiveBrightness, lcdDimDurationMs);
 }
 
 void saveSystemSettings() {
@@ -1180,7 +1427,9 @@ void saveSystemSettings() {
   prefs.putULong("lcd_timeout", lcdStandbyTimeoutMs);
   prefs.putBool("lcd_wifi", showLcdWifiGuide);
   prefs.putULong("debounce", cardDebounceMs);
+  prefs.putString("next_ssid", nextApSsid);
   prefs.putString("next_wifi_pass", nextApPass);
+  prefs.putBool("wifi_open", (nextApPass.length() == 0));
   prefs.putUChar("lcd_bright", lcdActiveBrightness);
   prefs.putULong("lcd_dim_ms", lcdDimDurationMs);
   prefs.putUChar("rgb_bright", rgbActiveBrightness);
@@ -1406,6 +1655,31 @@ body.modal-open{position:fixed !important;inset:0 !important;width:100% !importa
 @media (min-width:641px){.cards-mobile-view{display:none !important;}
 .cards-desktop-view{display:block !important;}
 }
+.history-detail-toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;}
+.history-detail-actions{display:flex;gap:6px;align-items:center;flex-wrap:nowrap;}
+.session-history-card{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--md-sys-color-outline-variant);border-radius:10px;background:var(--md-sys-color-surface);margin-bottom:0;}
+.session-card-header{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;}
+.session-card-title{font-size:0.95rem;font-weight:700;color:var(--md-sys-color-on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:110px;}
+.session-card-badges{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;}
+.session-card-footer{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.session-card-time{font-size:0.78rem;color:var(--md-sys-color-on-surface-variant);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.session-card-btn-group{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;}
+.session-card-btn-group .card-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;}
+.session-card-btn-group .card-btn-delete{width:32px;height:32px;min-width:32px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--md-sys-color-outline-variant);background:transparent;}
+.badge-late{background:var(--md-sys-color-error-container);color:var(--md-sys-color-error);font-weight:700;}
+@media (max-width:640px){
+  .history-back-btn .btn-text{display:none;}
+  .history-back-btn{padding:0 !important;width:34px !important;height:34px !important;min-width:34px !important;justify-content:center !important;border-radius:8px !important;}
+  .mobile-icon-btn .btn-text{display:none;}
+  .mobile-icon-btn{padding:0 !important;width:34px !important;height:34px !important;min-width:34px !important;justify-content:center !important;border-radius:8px !important;}
+  .mobile-icon-btn .icon-sm, .history-back-btn .icon-sm{width:17px;height:17px;margin:0;}
+  .history-action-btn .btn-text{display:none;}
+  .history-action-btn{padding:0 !important;width:34px !important;height:34px !important;min-width:34px !important;justify-content:center !important;border-radius:8px !important;}
+  .history-action-btn .icon-sm{width:17px;height:17px;margin:0;}
+  .session-card-btn-group .card-btn .btn-text{display:none;}
+  .session-card-btn-group .card-btn{padding:0 !important;width:32px !important;height:32px !important;min-width:32px !important;border-radius:8px !important;justify-content:center !important;}
+  .session-card-btn-group .card-btn .icon-sm{margin:0;width:16px;height:16px;}
+}
 .mobile-only-btn{display:none;}
 .mobile-only-text{display:none;}
 @media (max-width:767px){#regModal.modal-overlay{z-index:2500 !important;}
@@ -1447,14 +1721,25 @@ body.modal-open{position:fixed !important;inset:0 !important;width:100% !importa
     
     <div id="entranceStep1" class="entrance-step active">
       <h2 class="entrance-title">RFID Attendance</h2>
-      <p class="entrance-sub">Enter session title to start attendance</p>
+      <p class="entrance-sub">Enter session title &amp; optional grace period</p>
 
       <div class="text-field">
         <label>Session Title</label>
         <input type="text" id="sessionTitleInput" placeholder="e.g. CS101 Lecture, Morning Shift">
       </div>
 
-      <button class="btn btn-primary" style="width: 100%; margin-top: 6px;" onclick="goToEntranceStep(2)">
+      <div class="text-field" style="margin-top: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <label style="margin: 0; font-size: 0.8125rem; font-weight: 600;">Grace Period (Minutes)</label>
+          <span id="gracePeriodStatusBadge" class="badge" style="font-size: 0.72rem; opacity: 0.65;">Optional (No late rule)</span>
+        </div>
+        <input type="number" id="sessionGraceInput" min="0" max="240" value="" placeholder="Optional (e.g. 15)" oninput="updateGraceBadge(this.value)">
+        <div class="mono-txt" style="font-size: 0.72rem; color: var(--md-sys-color-on-surface-variant); margin-top: 6px;">
+          Leave empty or 0 for standard attendance. If set, attendees tapping after the grace period are marked as <strong style="color: var(--md-sys-color-error);">LATE</strong>.
+        </div>
+      </div>
+
+      <button class="btn btn-primary" style="width: 100%; margin-top: 12px;" onclick="goToEntranceStep(2)">
         Next
       </button>
 
@@ -1483,7 +1768,7 @@ body.modal-open{position:fixed !important;inset:0 !important;width:100% !importa
         <h2 class="entrance-title" style="margin: 0;">Session Direction</h2>
         <button class="btn btn-outlined btn-sm" onclick="goToEntranceStep(1)">&larr; Back</button>
       </div>
-      <p class="entrance-sub">Session: <strong id="step2TitlePreview" style="color: var(--md-sys-color-primary);">General</strong></p>
+      <p class="entrance-sub">Session: <strong id="step2TitlePreview" style="color: var(--md-sys-color-primary);">General</strong> <span id="step2GracePreview" class="badge badge-in" style="margin-left: 6px; font-size: 0.72rem; display: none;"></span></p>
 
       <div class="direction-grid">
         <div id="dirCardEntrance" class="direction-card selected" onclick="selectEntranceDirection('Entrance')">
@@ -1797,20 +2082,9 @@ body.modal-open{position:fixed !important;inset:0 !important;width:100% !importa
           <div class="notion-card">
             <div class="notion-card-title">Attendee Details</div>
 
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <div class="text-field" style="flex: 2; min-width: 130px;">
-                <label>First Name *</label>
-                <input type="text" id="regFirstName" placeholder="e.g. Juan" autocomplete="off" oninput="updateRegNamePreview()">
-              </div>
-              <div class="text-field" style="flex: 1; min-width: 70px; max-width: 100px;">
-                <label>M.I.</label>
-                <input type="text" id="regMiddleInitial" placeholder="e.g. D." maxlength="4" autocomplete="off" oninput="updateRegNamePreview()">
-              </div>
-            </div>
-
-            <div class="text-field" style="margin-top: 10px;">
-              <label>Last Name *</label>
-              <input type="text" id="regLastName" placeholder="e.g. Dela Cruz" autocomplete="off" oninput="updateRegNamePreview()">
+            <div class="text-field">
+              <label>Name *</label>
+              <input type="text" id="regOwnerName" placeholder="e.g. Juan Dela Cruz" autocomplete="off" oninput="updateRegNamePreview()">
             </div>
 
             <div class="text-field" style="margin-top: 10px;">
@@ -1818,13 +2092,9 @@ body.modal-open{position:fixed !important;inset:0 !important;width:100% !importa
               <input type="text" id="regOwnerId" placeholder="e.g. 2024-0001" autocomplete="off">
             </div>
 
-            
             <div id="regNamePreviewRow" style="margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: var(--md-sys-color-surface-container-high); font-size: 0.8rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;">
               <span>LCD Display: <code id="regLcdPreview" style="font-weight: 700; color: var(--md-sys-color-primary);">--</code></span>
-              <span id="regFullPreview" style="font-size: 0.75rem; color: var(--md-sys-color-on-surface-variant);"></span>
             </div>
-
-            <input type="hidden" id="regOwnerName" value="">
 
             <div id="regStatusCard" style="display: none; margin: 12px 0; padding: 12px; border-radius: 8px; font-size: 0.85rem; font-weight: 500;"></div>
 
@@ -1969,14 +2239,20 @@ body.modal-open{position:fixed !important;inset:0 !important;width:100% !importa
         <div id="notion-history" class="notion-pane" data-title="Session History" data-subtitle="Saved attendance sessions">
           
           <div id="historyListView" style="display: flex; flex-direction: column; gap: 10px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-              <div class="search-box" style="flex: 1; max-width: 300px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+              <div class="search-box" style="flex: 1; margin-bottom: 0;">
                 <svg class="icon-sm" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 14z"/></svg>
                 <input type="text" id="historySearchInput" placeholder="Search sessions..." oninput="filterHistoryList()">
               </div>
-              <div style="display: flex; gap: 6px; align-items: center;">
-                <button class="btn btn-outlined btn-sm" onclick="loadSessionHistory()">Refresh</button>
-                <button class="btn btn-outlined btn-sm" style="color: var(--md-sys-color-error);" onclick="clearAllHistory()">Delete All</button>
+              <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+                <button class="btn btn-outlined btn-sm history-action-btn" onclick="loadSessionHistory()" title="Refresh Sessions">
+                  <svg class="icon-sm" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                  <span class="btn-text">Refresh</span>
+                </button>
+                <button class="btn btn-outlined btn-sm history-action-btn" style="color: var(--md-sys-color-error);" onclick="clearAllHistory()" title="Delete All History">
+                  <svg class="icon-sm" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                  <span class="btn-text">Delete All</span>
+                </button>
               </div>
             </div>
 
@@ -2007,27 +2283,27 @@ body.modal-open{position:fixed !important;inset:0 !important;width:100% !importa
 
           
           <div id="historyDetailView" style="display: none; flex-direction: column; gap: 10px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-              <button class="btn btn-outlined btn-sm" onclick="backToHistoryList()">
+            <div class="history-detail-toolbar">
+              <button class="btn btn-outlined btn-sm history-back-btn" onclick="backToHistoryList()" title="Back to Sessions">
                 <svg class="icon-sm" viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-                Back to Sessions
+                <span class="btn-text">Back to Sessions</span>
               </button>
-              <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
-                <button id="historyResumeBtn" class="btn btn-primary btn-sm" onclick="resumeCurrentDetailSession()">
+              <div class="history-detail-actions">
+                <button id="historyResumeBtn" class="btn btn-primary btn-sm mobile-icon-btn" onclick="resumeCurrentDetailSession()" title="Continue Session">
                   <svg class="icon-sm" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                  Continue Session
+                  <span class="btn-text">Continue</span>
                 </button>
-                <button id="historyCopyTableBtn" class="btn btn-outlined btn-sm" onclick="copyHistoryDetailTable()" title="Copy table for Google Sheets / Excel">
+                <button id="historyCopyTableBtn" class="btn btn-outlined btn-sm mobile-icon-btn" onclick="copyHistoryDetailTable()" title="Copy table for Google Sheets / Excel">
                   <svg class="icon-sm" viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-                  Copy Table
+                  <span class="btn-text">Copy Table</span>
                 </button>
-                <a id="historyExportCsvBtn" href="#" class="btn btn-outlined btn-sm">
+                <a id="historyExportCsvBtn" href="#" class="btn btn-outlined btn-sm mobile-icon-btn" title="Export CSV">
                   <svg class="icon-sm" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-                  Export CSV
+                  <span class="btn-text">Export CSV</span>
                 </a>
-                <button id="historyDeleteDetailBtn" class="btn btn-outlined btn-sm" style="color: var(--md-sys-color-error);" onclick="deleteCurrentDetailSession()">
+                <button id="historyDeleteDetailBtn" class="btn btn-outlined btn-sm mobile-icon-btn" style="color: var(--md-sys-color-error);" onclick="deleteCurrentDetailSession()" title="Delete Session">
                   <svg class="icon-sm" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-                  Delete
+                  <span class="btn-text">Delete</span>
                 </button>
               </div>
             </div>
@@ -2326,42 +2602,91 @@ Maria C. Santos, 2024-002, EF:56:78:90"></textarea>
         </div>
 
         
-        <div id="notion-network" class="notion-pane" data-title="Wi-Fi Hotspot" data-subtitle="Network credentials and status">
+        <div id="notion-network" class="notion-pane" data-title="Wi-Fi Hotspot" data-subtitle="Network credentials and configuration">
+          <!-- Pending Reboot Notification Banner -->
+          <div id="pendingWifiBanner" style="display: none; align-items: center; justify-content: space-between; padding: 12px 14px; background: var(--md-sys-color-warning-container); color: var(--md-sys-color-on-warning-container); border: 1px solid var(--md-sys-color-warning); border-radius: 12px; margin-bottom: 14px; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <svg class="icon-sm" style="color: var(--md-sys-color-warning); flex-shrink: 0;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+              <div style="font-size: 0.8125rem; line-height: 1.35;">
+                <strong>Pending Reboot:</strong> Next boot will use <span id="pendingWifiInfo" style="font-weight: 600;">--</span>.
+              </div>
+            </div>
+            <button class="btn btn-sm" onclick="triggerSystemReboot()" style="background: var(--md-sys-color-warning); color: #fff; border: none; padding: 4px 10px; font-weight: 600; white-space: nowrap; border-radius: 6px;">
+              Reboot
+            </button>
+          </div>
+
+          <!-- Active Hotspot Status Card -->
           <div class="notion-card">
-            <div class="notion-card-title">Hotspot Status</div>
+            <div class="notion-card-title">Active Hotspot Status</div>
             <div class="notion-setting-row">
               <span class="notion-row-label">Network Name (SSID)</span>
-              <span id="notionSsidText" style="font-family: monospace; font-weight: 600;">ESP32-Attendance</span>
+              <span id="notionSsidText" style="font-family: monospace; font-weight: 700; color: var(--md-sys-color-primary);">ESP32-Attendance</span>
             </div>
             <div class="notion-setting-row">
-              <span class="notion-row-label">IP Address</span>
-              <span id="notionIpText" style="font-family: monospace;">192.168.4.1</span>
+              <span class="notion-row-label">Password</span>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span id="notionActiveWifiPass" style="font-family: monospace; font-weight: 600;">••••••••</span>
+                <button type="button" id="btnToggleWifiPassEye" class="icon-btn" onclick="toggleWifiPassVisibility()" title="Show/Hide Password" style="width: 28px; height: 28px;">
+                  <svg id="eyeIconShow" class="icon-sm" viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                  <svg id="eyeIconHide" class="icon-sm" style="display: none;" viewBox="0 0 24 24"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.44-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>
+                </button>
+              </div>
             </div>
             <div class="notion-setting-row">
-              <span class="notion-row-label">Gateway</span>
-              <span id="notionGwText" style="font-family: monospace;">192.168.4.1</span>
+              <span class="notion-row-label">Portal Address</span>
+              <span id="notionIpText" style="font-family: monospace; font-weight: 600;">192.168.4.1</span>
             </div>
             <div class="notion-setting-row">
               <span class="notion-row-label">Connected Clients</span>
-              <span id="notionClientsBadge" class="badge">1 device</span>
+              <span id="notionWifiClients" class="badge">1 device</span>
             </div>
           </div>
 
+          <!-- Hotspot Configuration Card -->
           <div class="notion-card">
-            <div class="notion-card-title">Hotspot Password</div>
-            <div class="notion-card-desc">Takes effect after restart.</div>
+            <div class="notion-card-title">Configure Hotspot</div>
+            <div class="notion-card-desc">Set Wi-Fi name, security mode, and 8-character password. Takes effect on restart.</div>
 
-            <div style="margin-bottom: 10px;">
-              <div style="display: flex; gap: 8px;">
-                <input type="text" id="newWifiPassInput" class="form-input" placeholder="Min. 8 characters (or blank for open)" style="flex: 1;" maxlength="63">
-                <button class="btn btn-primary" type="button" onclick="submitChangeWifiPassword()">
-                  Save
-                </button>
-              </div>
-              <div style="font-size: 0.73rem; color: var(--md-sys-color-on-surface-variant); margin-top: 6px;">
-                Password will be shown on the LCD screen on next boot.
+            <!-- Wi-Fi Name (SSID) -->
+            <div style="margin-bottom: 14px;">
+              <label class="form-label" style="display: flex; justify-content: space-between; font-size: 0.8125rem; font-weight: 600; margin-bottom: 4px;">
+                <span>Wi-Fi Network Name (SSID)</span>
+                <span id="wifiSsidLenBadge" class="badge" style="font-size: 0.72rem;">1-32 chars</span>
+              </label>
+              <input type="text" id="newWifiSsidInput" class="form-input" placeholder="e.g. ESP32-Attendance" maxlength="32" style="width: 100%;" oninput="onWifiSsidInput(this.value)">
+              <div style="font-size: 0.72rem; color: var(--md-sys-color-on-surface-variant); margin-top: 4px;">
+                Name broadcast by the ESP32 access point to nearby phones and devices.
               </div>
             </div>
+
+            <!-- Disable Password Toggle (Open Network) -->
+            <label class="notion-setting-row toggle-row" for="disableWifiPassToggle" style="margin-bottom: 14px; cursor: pointer; border-radius: 8px; background: var(--md-sys-color-surface-container-high); padding: 10px 12px; border: 1px solid var(--md-sys-color-outline-variant);">
+              <div>
+                <div style="font-weight: 600; font-size: 0.875rem;">Disable Wi-Fi Password (Open Network)</div>
+                <div style="font-size: 0.75rem; color: var(--md-sys-color-on-surface-variant); margin-top: 2px;">
+                  Allows devices to connect directly without entering any password.
+                </div>
+              </div>
+              <input type="checkbox" id="disableWifiPassToggle" onchange="onToggleDisableWifiPass()">
+            </label>
+
+            <!-- Password Input Container -->
+            <div id="wifiPasswordSection" style="margin-bottom: 16px; transition: opacity 0.2s;">
+              <label class="form-label" style="display: flex; justify-content: space-between; font-size: 0.8125rem; font-weight: 600; margin-bottom: 4px;">
+                <span>Hotspot Password</span>
+                <span id="wifiPassLenBadge" class="badge badge-out" style="font-size: 0.72rem;">Exactly 8 chars</span>
+              </label>
+              <input type="text" id="newWifiPassInput" class="form-input" placeholder="Exactly 8 characters" maxlength="8" minlength="8" style="width: 100%; font-family: monospace; font-size: 0.95rem; letter-spacing: 1.5px;" oninput="onWifiPassInput(this.value)">
+              <div style="font-size: 0.72rem; color: var(--md-sys-color-on-surface-variant); margin-top: 4px;">
+                Must be <strong>strictly 8 characters</strong> (minimum &amp; maximum). Displayed on 16x2 LCD screen on boot.
+              </div>
+            </div>
+
+            <button class="btn btn-primary" type="button" onclick="submitChangeWifiConfig()" style="width: 100%; justify-content: center; height: 40px; font-weight: 600;">
+              <svg class="icon-sm" viewBox="0 0 24 24"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm2 16H5V5h11.17L19 7.83V19zm-7-7c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3zM6 6h9v4H6z"/></svg>
+              Save Wi-Fi Settings
+            </button>
           </div>
         </div>
 
@@ -2506,46 +2831,37 @@ window.saveCurrentSession = function() { if (window.saveActiveSession) window.sa
 window.startSingleCardRegistration = function() { if (window.startRegistration) window.startRegistration(); };
 window.cancelSingleRegistration = function() { if (window.cancelRegistration) window.cancelRegistration(); };
 window.updateRegNamePreview = function() {
-  const first = document.getElementById('regFirstName')?.value.trim() || '';
-  const mi = document.getElementById('regMiddleInitial')?.value.trim() || '';
-  const last = document.getElementById('regLastName')?.value.trim() || '';
-  const miClean = mi ? (mi.endsWith('.') ? mi : mi + '.') : '';
-
-  let full = '';
-  if (last && first) {
-    full = `${last}, ${first}${miClean ? ' ' + miClean : ''}`;
-  } else if (first || last) {
-    full = last || first;
-  }
-
-  const hidden = document.getElementById('regOwnerName');
-  if (hidden) hidden.value = full;
-
+  const name = document.getElementById('regOwnerName')?.value.trim() || '';
   const lcdEl = document.getElementById('regLcdPreview');
-  const fullEl = document.getElementById('regFullPreview');
   if (lcdEl) {
-    if (last && first) {
-      lcdEl.innerText = `${last.toUpperCase()}, ${first.charAt(0).toUpperCase()}.`;
-    } else if (last || first) {
-      lcdEl.innerText = (last || first).toUpperCase();
-    } else {
+    if (!name) {
       lcdEl.innerText = '--';
+    } else {
+      let commaIdx = name.indexOf(',');
+      if (commaIdx !== -1) {
+        let surname = name.substring(0, commaIdx).trim();
+        let rest = name.substring(commaIdx + 1).trim();
+        let initial = rest.length > 0 ? rest.charAt(0).toUpperCase() : '';
+        lcdEl.innerText = initial ? `${surname.toUpperCase()}, ${initial}.` : surname.toUpperCase();
+      } else {
+        let parts = name.split(/\s+/).filter(Boolean);
+        if (parts.length === 1) {
+          lcdEl.innerText = parts[0].toUpperCase().substring(0, 16);
+        } else {
+          let first = parts[0];
+          let last = parts[parts.length - 1];
+          lcdEl.innerText = `${last.toUpperCase()}, ${first.charAt(0).toUpperCase()}.`.substring(0, 16);
+        }
+      }
     }
   }
-  if (fullEl) fullEl.innerText = full ? `(${full})` : '';
 };
 
 window.clearRegistrationFields = function() {
-  const f = document.getElementById('regFirstName');
-  const m = document.getElementById('regMiddleInitial');
-  const l = document.getElementById('regLastName');
-  const i = document.getElementById('regOwnerId');
   const n = document.getElementById('regOwnerName');
-  if (f) f.value = '';
-  if (m) m.value = '';
-  if (l) l.value = '';
-  if (i) i.value = '';
+  const i = document.getElementById('regOwnerId');
   if (n) n.value = '';
+  if (i) i.value = '';
   window.updateRegNamePreview();
   const s = document.getElementById('regStatusCard');
   if (s) s.style.display = 'none';
@@ -2671,12 +2987,48 @@ window.toggleTheme = function() {
 window.goToEntranceStep = function(stepNum) {
   if (stepNum === 2) {
     const titleVal = document.getElementById('sessionTitleInput').value.trim() || 'General Session';
+    const rawGrace = document.getElementById('sessionGraceInput')?.value || '';
+    const graceVal = (rawGrace !== '' && !isNaN(parseInt(rawGrace, 10))) ? Math.max(0, parseInt(rawGrace, 10)) : 0;
     document.getElementById('step2TitlePreview').innerText = titleVal;
+    const gracePrev = document.getElementById('step2GracePreview');
+    if (gracePrev) {
+      if (graceVal > 0) {
+        gracePrev.innerText = graceVal + 'm grace';
+        gracePrev.className = 'badge badge-in';
+        gracePrev.style.display = 'inline-block';
+      } else {
+        gracePrev.style.display = 'none';
+      }
+    }
     document.getElementById('entranceStep1').classList.remove('active');
     document.getElementById('entranceStep2').classList.add('active');
   } else {
     document.getElementById('entranceStep2').classList.remove('active');
     document.getElementById('entranceStep1').classList.add('active');
+  }
+};
+
+window.setGracePreset = function(mins) {
+  const el = document.getElementById('sessionGraceInput');
+  if (el) {
+    el.value = (mins && mins > 0) ? mins : '';
+    window.updateGraceBadge(el.value);
+  }
+};
+
+window.updateGraceBadge = function(mins) {
+  const badge = document.getElementById('gracePeriodStatusBadge');
+  if (!badge) return;
+  const raw = String(mins || '').trim();
+  const m = parseInt(raw, 10);
+  if (!isNaN(m) && m > 0) {
+    badge.innerText = m + 'm grace';
+    badge.className = 'badge badge-in';
+    badge.style.opacity = '1';
+  } else {
+    badge.innerText = 'Optional (No late rule)';
+    badge.className = 'badge';
+    badge.style.opacity = '0.65';
   }
 };
 
@@ -2688,9 +3040,12 @@ window.selectEntranceDirection = function(dir) {
 
 window.startSession = async function() {
   const title = document.getElementById('sessionTitleInput').value.trim() || 'General Session';
+  const rawGrace = document.getElementById('sessionGraceInput')?.value || '';
+  const graceVal = (rawGrace !== '' && !isNaN(parseInt(rawGrace, 10))) ? Math.max(0, parseInt(rawGrace, 10)) : 0;
   const formData = new URLSearchParams();
   formData.append('type', selectedDirection);
   formData.append('title', title);
+  formData.append('grace_minutes', graceVal);
 
   try {
     const res = await fetch('/api/session/start', { method: 'POST', body: formData });
@@ -3010,24 +3365,33 @@ window.renderHistoryList = function(sessions) {
     const safeTitle = (s.title || 'session').trim().replace(/[/\\:*?"<>|\s,;]+/g, '_').replace(/^_+|_+$/g, '') || 'session';
     const count = s.attendee_count !== undefined ? s.attendee_count : 0;
 
-    cardHtml += `<div class="notion-card" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; gap: 12px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface); margin-bottom: 0;">
-      <div style="flex: 1; min-width: 0;">
-        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
-          <strong style="font-size: 0.9375rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;">${window.escapeHtml(s.title || 'Session')}</strong>
+    cardHtml += `<div class="session-history-card">
+      <div class="session-card-header">
+        <strong class="session-card-title">${window.escapeHtml(s.title || 'Session')}</strong>
+        <div class="session-card-badges">
           ${modeBadge}
           <span class="badge badge-done">${count} Attendees</span>
         </div>
-        <div class="mono-txt" style="font-size: 0.8125rem; color: var(--md-sys-color-on-surface-variant);">
-          ${window.escapeHtml(s.date)} • ${window.formatTime12h(s.save_time)}
-        </div>
       </div>
-      <div style="display: inline-flex; gap: 6px; align-items: center; flex-shrink: 0; flex-wrap: wrap;">
-        <button class="btn btn-primary btn-sm" onclick="resumeSessionFromList('${window.escapeHtml(s.id)}')">Continue</button>
-        <button class="btn btn-tonal btn-sm" onclick="viewSessionDetail('${window.escapeHtml(s.id)}')">View</button>
-        <a href="/api/history/export.csv?id=${encodeURIComponent(s.id)}" download="${window.escapeHtml(safeTitle)}.csv" class="btn btn-outlined btn-sm">CSV</a>
-        <button class="icon-btn" onclick="deleteHistorySession('${window.escapeHtml(s.id)}')" title="Delete" style="color: var(--md-sys-color-error); width: 28px; height: 28px;">
-          <svg class="icon-sm" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-        </button>
+      <div class="session-card-footer">
+        <span class="mono-txt session-card-time">${window.escapeHtml(s.date)} • ${window.formatTime12h(s.save_time)}</span>
+        <div class="session-card-btn-group">
+          <button class="btn btn-primary btn-sm card-btn" onclick="resumeSessionFromList('${window.escapeHtml(s.id)}')" title="Continue Session">
+            <svg class="icon-sm" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            <span class="btn-text">Continue</span>
+          </button>
+          <button class="btn btn-tonal btn-sm card-btn" onclick="viewSessionDetail('${window.escapeHtml(s.id)}')" title="View Attendees">
+            <svg class="icon-sm" viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+            <span class="btn-text">View</span>
+          </button>
+          <a href="/api/history/export.csv?id=${encodeURIComponent(s.id)}" download="${window.escapeHtml(safeTitle)}.csv" class="btn btn-outlined btn-sm card-btn" title="Export CSV">
+            <svg class="icon-sm" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+            <span class="btn-text">CSV</span>
+          </a>
+          <button class="icon-btn card-btn-delete" onclick="deleteHistorySession('${window.escapeHtml(s.id)}')" title="Delete Session" style="color: var(--md-sys-color-error);">
+            <svg class="icon-sm" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          </button>
+        </div>
       </div>
     </div>`;
 
@@ -3068,6 +3432,8 @@ window.filterHistoryList = function() {
 
 window.viewSessionDetail = async function(id) {
   try {
+    const searchEl = document.getElementById('historyDetailSearch');
+    if (searchEl) searchEl.value = '';
     const res = await fetch('/api/history/session?id=' + encodeURIComponent(id));
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
@@ -3228,7 +3594,16 @@ window.resumeSessionFromList = async function(id) {
     return;
   }
   try {
-    const res = await fetch('/api/history/resume?id=' + encodeURIComponent(id), { method: 'POST' });
+    // If resuming from detail view or cached attendees, pass as backup payload
+    let backupAttendees = [];
+    if (currentDetailSession && (currentDetailSession.id === id || currentDetailSession.title === title) && Array.isArray(currentDetailAttendees) && currentDetailAttendees.length > 0) {
+      backupAttendees = currentDetailAttendees;
+    }
+    const res = await fetch('/api/history/resume?id=' + encodeURIComponent(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records: backupAttendees })
+    });
     const data = await res.json();
     if (!data.success) {
       alert('Error continuing session: ' + (data.message || 'Unknown error'));
@@ -3239,13 +3614,15 @@ window.resumeSessionFromList = async function(id) {
     window.closeSettingsModal();
     window.closeHistoryModal();
 
-    // Populate active log immediately from restored response
+    // Populate active log immediately from restored response or backup
     window.setSessionSavedState(false);
-    if (data.records && Array.isArray(data.records)) {
+    if (data.records && Array.isArray(data.records) && data.records.length > 0) {
       allAttendeesData = data.records;
-      window.renderAttendanceTable(allAttendeesData);
-      window.updateAttendanceStats(allAttendeesData);
+    } else if (backupAttendees.length > 0) {
+      allAttendeesData = backupAttendees;
     }
+    window.renderAttendanceTable(allAttendeesData);
+    window.updateAttendanceStats(allAttendeesData);
 
     // Update active session title & mode chips immediately
     if (data.title) {
@@ -3313,6 +3690,9 @@ window.renderHistoryDetailTable = function(records) {
     const idBadge = sId ? `<span class="badge badge-in">${sId}</span>` : '';
     const safeName = window.escapeHtml(r.name || 'Unknown');
     const safeUid = window.escapeHtml(r.uid || '--');
+    const isLate = (r.status === 'Late');
+    const statusClass = isLate ? 'badge-late' : 'badge-done';
+    const statusIcon = isLate ? '&#9888; ' : '';
     const statusText = window.escapeHtml(r.status || 'Present');
 
     cardHtml += `<div class="notion-card" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; gap: 12px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface); margin-bottom: 0;">
@@ -3320,10 +3700,10 @@ window.renderHistoryDetailTable = function(records) {
         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
           <strong style="font-size: 0.9375rem;">${safeName}</strong>
           ${idBadge}
-          <span class="badge badge-done">${statusText}</span>
+          <span class="badge ${statusClass}">${statusIcon}${statusText}</span>
         </div>
         <div class="mono-txt" style="font-size: 0.8125rem; color: var(--md-sys-color-on-surface-variant);">
-          ${safeUid} • In: ${window.formatTime12h(r.time_in)} ${r.time_out && r.time_out !== '--' ? '• Out: ' + window.formatTime12h(r.time_out) : ''}
+          ${safeUid} \u2022 In: ${window.formatTime12h(r.time_in)} ${r.time_out && r.time_out !== '--' ? '\u2022 Out: ' + window.formatTime12h(r.time_out) : ''}
         </div>
       </div>
     </div>`;
@@ -3335,7 +3715,7 @@ window.renderHistoryDetailTable = function(records) {
       <td><span class="mono-txt">${safeUid}</span></td>
       <td class="mono-txt">${window.formatTime12h(r.time_in)}</td>
       <td class="mono-txt">${window.formatTime12h(r.time_out)}</td>
-      <td><span class="badge badge-done">${statusText}</span></td>
+      <td><span class="badge ${statusClass}">${statusIcon}${statusText}</span></td>
     </tr>`;
   });
 
@@ -3584,44 +3964,121 @@ window.toggleWifiPassVisibility = function() {
   const eyeShow = document.getElementById('eyeIconShow');
   const eyeHide = document.getElementById('eyeIconHide');
   if (!el) return;
+  const hasPass = Boolean(window._currentWifiPass && window._currentWifiPass.length > 0);
+  if (!hasPass) {
+    el.innerText = '(Open - No Password)';
+    if (eyeShow) eyeShow.style.display = 'none';
+    if (eyeHide) eyeHide.style.display = 'none';
+    return;
+  }
   if (isWifiPassVisible) {
-    el.innerText = window._currentWifiPass || '(no password)';
+    el.innerText = window._currentWifiPass;
     if (eyeShow) eyeShow.style.display = 'none';
     if (eyeHide) eyeHide.style.display = 'inline';
   } else {
-    el.innerText = (window._currentWifiPass && window._currentWifiPass.length > 0) ? '••••••••' : '(no password)';
+    el.innerText = '••••••••';
     if (eyeShow) eyeShow.style.display = 'inline';
     if (eyeHide) eyeHide.style.display = 'none';
   }
 };
 
-window.submitChangeWifiPassword = async function() {
-  const input = document.getElementById('newWifiPassInput');
-  if (!input) return;
-  const newPass = input.value.trim();
-  if (newPass.length > 0 && newPass.length < 8) {
-    alert('Wi-Fi password must be at least 8 characters for WPA2 (or leave empty for an open network).');
-    input.focus();
+window.onWifiSsidInput = function(val) {
+  const badge = document.getElementById('wifiSsidLenBadge');
+  if (!badge) return;
+  const len = (val || '').trim().length;
+  if (len >= 1 && len <= 32) {
+    badge.className = 'badge badge-in';
+    badge.innerText = `${len} / 32 chars`;
+  } else {
+    badge.className = 'badge badge-out';
+    badge.innerText = '1-32 chars required';
+  }
+};
+
+window.onToggleDisableWifiPass = function() {
+  const toggle = document.getElementById('disableWifiPassToggle');
+  const passSec = document.getElementById('wifiPasswordSection');
+  const passInput = document.getElementById('newWifiPassInput');
+  const badge = document.getElementById('wifiPassLenBadge');
+  if (!toggle || !passSec || !passInput) return;
+
+  if (toggle.checked) {
+    passSec.style.opacity = '0.35';
+    passSec.style.pointerEvents = 'none';
+    passInput.disabled = true;
+    if (badge) {
+      badge.className = 'badge badge-out';
+      badge.innerText = 'Disabled (Open AP)';
+    }
+  } else {
+    passSec.style.opacity = '1';
+    passSec.style.pointerEvents = 'auto';
+    passInput.disabled = false;
+    window.onWifiPassInput(passInput.value);
+    passInput.focus();
+  }
+};
+
+window.onWifiPassInput = function(val) {
+  const badge = document.getElementById('wifiPassLenBadge');
+  if (!badge) return;
+  const len = (val || '').length;
+  if (len === 8) {
+    badge.className = 'badge badge-done';
+    badge.innerText = '8 / 8 chars ✓';
+  } else {
+    badge.className = 'badge badge-out';
+    badge.innerText = `${len} / 8 chars (exact)`;
+  }
+};
+
+window.submitChangeWifiConfig = async function() {
+  const ssidInput = document.getElementById('newWifiSsidInput');
+  const passInput = document.getElementById('newWifiPassInput');
+  const toggleDisable = document.getElementById('disableWifiPassToggle');
+
+  const newSsid = (ssidInput ? ssidInput.value : '').trim();
+  const isOpen = Boolean(toggleDisable && toggleDisable.checked);
+  const newPass = (passInput ? passInput.value : '').trim();
+
+  if (!newSsid) {
+    alert('Please enter a Wi-Fi Network Name (SSID).');
+    if (ssidInput) ssidInput.focus();
+    return;
+  }
+  if (newSsid.length > 32) {
+    alert('Wi-Fi Network Name (SSID) cannot exceed 32 characters.');
+    if (ssidInput) ssidInput.focus();
     return;
   }
 
-  const confirmMsg = newPass.length === 0
-    ? 'Are you sure you want to change to an OPEN Wi-Fi network (no password)?\n\nThis change will take effect on next boot, and the LCD guide will be automatically enabled.'
-    : `Change Wi-Fi password to "${newPass}"?\n\nThis change will take effect on NEXT BOOT, and the 16x2 LCD password display will be automatically enabled.`;
+  if (!isOpen) {
+    if (newPass.length !== 8) {
+      alert(`Wi-Fi password must be EXACTLY 8 characters (max and minimum).\n\nCurrent length: ${newPass.length} character(s).\n\nIf you want an open network without a password, check "Disable Wi-Fi Password".`);
+      if (passInput) passInput.focus();
+      return;
+    }
+  }
+
+  const confirmMsg = isOpen
+    ? `Change Wi-Fi network to:\n• Name (SSID): "${newSsid}"\n• Security: NO PASSWORD (Open Hotspot)\n\nThis change will take effect on NEXT BOOT, and the 16x2 LCD guide will be updated.`
+    : `Change Wi-Fi network to:\n• Name (SSID): "${newSsid}"\n• Password: "${newPass}" (8 chars)\n\nThis change will take effect on NEXT BOOT, and the 16x2 LCD screen will display the new credentials.`;
 
   if (!confirm(confirmMsg)) return;
 
   try {
     const fd = new URLSearchParams();
-    fd.append('password', newPass);
-    const res = await fetch('/api/wifi/password', { method: 'POST', body: fd });
+    fd.append('ssid', newSsid);
+    fd.append('disable_password', isOpen ? '1' : '0');
+    fd.append('password', isOpen ? '' : newPass);
+
+    const res = await fetch('/api/wifi/config', { method: 'POST', body: fd });
     const data = await res.json();
     if (data.success) {
-      input.value = '';
       const gToggle = document.getElementById('lcdWifiGuideToggle');
       if (gToggle) gToggle.checked = true;
 
-      const rebootNow = confirm(data.message + '\n\nWould you like to reboot the ESP32 now to apply the new Wi-Fi password immediately?');
+      const rebootNow = confirm(data.message + '\n\nWould you like to reboot the ESP32 now to apply the new Wi-Fi credentials immediately?');
       if (rebootNow) {
         await window.triggerSystemReboot();
       } else {
@@ -3634,6 +4091,8 @@ window.submitChangeWifiPassword = async function() {
     alert('Network error: ' + (e.message || e));
   }
 };
+
+window.submitChangeWifiPassword = window.submitChangeWifiConfig; // Backward compatibility
 
 window.triggerLcdSleep = async function() {
   const btn = document.getElementById('btnLcdOff');
@@ -3754,33 +4213,14 @@ window.sendImportToBatch = function() {
 };
 
 window.startRegistration = async function() {
-  const first = document.getElementById('regFirstName')?.value.trim() || '';
-  const mi = document.getElementById('regMiddleInitial')?.value.trim() || '';
-  const last = document.getElementById('regLastName')?.value.trim() || '';
+  const name = document.getElementById('regOwnerName')?.value.trim() || '';
   const idNum = document.getElementById('regOwnerId')?.value.trim() || '';
 
-  let name = '';
-  if (first && last) {
-    const miClean = mi ? (mi.endsWith('.') ? mi : mi + '.') : '';
-    name = `${last}, ${first}${miClean ? ' ' + miClean : ''}`;
-  } else if (document.getElementById('regOwnerName')?.value.trim()) {
-    name = document.getElementById('regOwnerName').value.trim();
-  }
-
-  if (!first && !name) {
-    alert('Please enter attendee First Name.');
-    document.getElementById('regFirstName')?.focus();
+  if (!name) {
+    alert('Please enter attendee Name.');
+    document.getElementById('regOwnerName')?.focus();
     return;
   }
-  if (!last && !name) {
-    alert('Please enter attendee Last Name.');
-    document.getElementById('regLastName')?.focus();
-    return;
-  }
-  if (!name) name = `${last}, ${first}`;
-
-  const hidden = document.getElementById('regOwnerName');
-  if (hidden) hidden.value = name;
 
   const inlineStatus = document.getElementById('regStatusCard');
   if (inlineStatus) {
@@ -3870,7 +4310,11 @@ window.startRegPolling = function() {
         const barEl = document.getElementById('regCountdownBar');
         if (barEl) barEl.style.width = pct + '%';
       } else if (data.state === 'success') {
-        // Successfully assigned new card
+        // Stop polling immediately to avoid looping tunes
+        clearInterval(regPollInterval);
+        regPollInterval = null;
+        isPollingReg = false;
+
         window.playAudioTone('success');
         if (iconWrap) {
           iconWrap.style.background = 'var(--md-sys-color-success-container)';
@@ -3900,7 +4344,11 @@ window.startRegPolling = function() {
         }
         window.loadCardsDatabase();
       } else if (data.state === 'same_card') {
-        // Same card for same person tapped
+        // Stop polling immediately
+        clearInterval(regPollInterval);
+        regPollInterval = null;
+        isPollingReg = false;
+
         window.playAudioTone('success');
         if (iconWrap) {
           iconWrap.style.background = 'var(--md-sys-color-primary-container)';
@@ -3923,14 +4371,18 @@ window.startRegPolling = function() {
           inlineStatus.style.display = 'block';
           inlineStatus.style.background = 'var(--md-sys-color-surface-container-high)';
           inlineStatus.style.color = 'var(--md-sys-color-on-surface)';
-          inlineStatus.style.border = '1px solid var(--md-sys-color-primary)';
+          inlineStatus.style.border = '1px solid var(--md-sys-color-outline)';
           inlineStatus.innerHTML = '<div style="display:flex;align-items:center;gap:8px;">' +
             '<svg class="icon-sm" style="color:var(--md-sys-color-primary);flex-shrink:0;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>' +
-            '<div><b>Already Registered</b><br>UID <code>' + window.escapeHtml(data.result_uid) + '</code> is already registered to <b>' + window.escapeHtml(ownerName) + '</b>.</div>' +
+            '<div><b>Already Registered</b><br>This card is already registered to <b>' + window.escapeHtml(ownerName) + '</b>.</div>' +
             '</div>';
         }
       } else if (data.state === 'conflict') {
-        // Card is already registered to someone else -> Prompt to use another tag instead!
+        // Stop polling immediately
+        clearInterval(regPollInterval);
+        regPollInterval = null;
+        isPollingReg = false;
+
         window.playAudioTone('alert');
         const conflictOwner = data.conflict_name || 'another person';
         const conflictId = data.conflict_id ? ' (' + data.conflict_id + ')' : '';
@@ -3953,67 +4405,74 @@ window.startRegPolling = function() {
           inlineStatus.style.color = 'var(--md-sys-color-on-error-container)';
           inlineStatus.style.border = '1px solid var(--md-sys-color-error)';
           inlineStatus.innerHTML = '<div style="display:flex;align-items:center;gap:8px;">' +
-            '<svg class="icon-sm" style="color:var(--md-sys-color-error);flex-shrink:0;" viewBox="0 0 24 24"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>' +
-            '<div><b>Card Already in Use</b><br>UID <code>' + window.escapeHtml(data.result_uid) + '</code> is registered to <b>' + window.escapeHtml(conflictOwner) + conflictId + '</b>.<br>Please use another card.</div>' +
+            '<svg class="icon-sm" style="color:var(--md-sys-color-error);flex-shrink:0;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>' +
+            '<div><b>Card in Use</b><br>Already registered to <b>' + window.escapeHtml(conflictOwner) + '</b>.<br>Please use another card.</div>' +
             '</div>';
-        }
-
-        // Re-arm registration on ESP32 after 1.2s so the user can immediately tap another card
-        if (window._activeRegParams) {
-          setTimeout(async () => {
-            if (document.getElementById('regModal')?.classList.contains('active')) {
-              try {
-                await fetch('/api/register/start?' + window._activeRegParams.toString(), { method: 'POST', body: window._activeRegParams });
-              } catch(e) {}
-            }
-          }, 1200);
         }
       } else if (data.state === 'timeout') {
         clearInterval(regPollInterval);
+        regPollInterval = null;
         isPollingReg = false;
         window.playAudioTone('alert');
         if (statusText) {
           statusText.innerText = 'Timed out. No card detected.';
           statusText.style.color = 'var(--md-sys-color-error)';
         }
-      } else if (data.state === 'cancelled') {
-        clearInterval(regPollInterval);
-        isPollingReg = false;
-        document.getElementById('regModal')?.classList.remove('active');
+        if (iconWrap) {
+          iconWrap.style.background = 'var(--md-sys-color-error-container)';
+          iconWrap.style.color = 'var(--md-sys-color-error)';
+        }
+        if (iconEl) {
+          iconEl.innerHTML = '<path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>';
+        }
+        if (progEl) progEl.style.display = 'none';
       }
     } catch(e) {}
   }, 450);
 };
 
 window.registerAnotherCard = function() {
+  if (regPollInterval) {
+    clearInterval(regPollInterval);
+    regPollInterval = null;
+  }
+  isPollingReg = false;
+  try { fetch('/api/register/cancel', { method: 'POST' }); } catch(e) {}
   document.getElementById('regModal')?.classList.remove('active');
-  document.getElementById('regFirstName').value = '';
-  document.getElementById('regMiddleInitial').value = '';
-  document.getElementById('regLastName').value = '';
-  document.getElementById('regOwnerId').value = '';
-  document.getElementById('regOwnerName').value = '';
+  const nameInput = document.getElementById('regOwnerName');
+  const idInput = document.getElementById('regOwnerId');
+  if (nameInput) nameInput.value = '';
+  if (idInput) idInput.value = '';
   window.updateRegNamePreview();
   const inlineStatus = document.getElementById('regStatusCard');
   if (inlineStatus) inlineStatus.style.display = 'none';
-  document.getElementById('regFirstName')?.focus();
+  if (nameInput) nameInput.focus();
 };
 
 window.closeRegModal = function() {
+  if (regPollInterval) {
+    clearInterval(regPollInterval);
+    regPollInterval = null;
+  }
+  isPollingReg = false;
+  try { fetch('/api/register/cancel', { method: 'POST' }); } catch(e) {}
   document.getElementById('regModal')?.classList.remove('active');
   window.switchNotionTab('notion-reg-single');
 };
 
 window.cancelRegistration = async function() {
-  if (regPollInterval) clearInterval(regPollInterval);
+  if (regPollInterval) {
+    clearInterval(regPollInterval);
+    regPollInterval = null;
+  }
   isPollingReg = false;
   try {
     await fetch('/api/register/cancel', { method: 'POST' });
   } catch(e) {}
-  document.getElementById('regModal').classList.remove('active');
+  document.getElementById('regModal')?.classList.remove('active');
 };
 
-
-  let batchAttendees = [];
+let batchAttendees = [];
   let batchCurrentIndex = 0;
   let batchPollInterval = null;
   let isBatchRunning = false;
@@ -4488,11 +4947,13 @@ window.loadAttendanceLog = async function() {
   try {
     const res = await fetch('/api/attendance');
     const data = await res.json();
-    allAttendeesData = data;
+    if (Array.isArray(data) && (data.length > 0 || allAttendeesData.length === 0)) {
+      allAttendeesData = data;
+    }
     const q = document.getElementById('attendanceSearch').value.trim();
     if (q) window.filterAttendanceTable();
-    else window.renderAttendanceTable(data);
-    window.updateAttendanceStats(data);
+    else window.renderAttendanceTable(allAttendeesData);
+    window.updateAttendanceStats(allAttendeesData);
   } catch(e) {}
 };
 
@@ -4522,7 +4983,9 @@ window.renderAttendanceTable = function(records) {
     const hasIn = r.time_in && r.time_in !== '--' && r.time_in !== '';
     const hasOut = r.time_out && r.time_out !== '--' && r.time_out !== '';
     let statusBadge = '';
-    if (hasIn && hasOut) {
+    if (r.status === 'Late') {
+      statusBadge = '<span class="badge badge-late">&#9888; Late</span>';
+    } else if (hasIn && hasOut) {
       statusBadge = '<span class="badge badge-done">&#10003; Done</span>';
     } else if (hasIn) {
       statusBadge = '<span class="badge badge-in">In</span>';
@@ -4556,7 +5019,13 @@ window.filterAttendanceTable = function() {
 
 window.pollStatus = async function() {
   try {
-    const res = await fetch('/api/status');
+    const isSettingsModal = document.getElementById('settingsModal')?.classList.contains('active');
+    const isTimeModal = document.getElementById('timeModal')?.classList.contains('active');
+    const isFirstBoot = document.getElementById('firstBootModal')?.classList.contains('active');
+    const isHistoryModal = document.getElementById('historyModal')?.classList.contains('active');
+    const anyModalOpen = Boolean(isSettingsModal || isTimeModal || isFirstBoot || isHistoryModal);
+
+    const res = await fetch('/api/status?settings_open=' + (anyModalOpen ? '1' : '0'));
     const d = await res.json();
 
     document.getElementById('headerClock').innerText = d.time_set ? window.formatClock(d.current_time) : '--:--:--';
@@ -4661,25 +5130,63 @@ window.pollStatus = async function() {
       const safeLiveTitle = (d.session_title || 'attendance').trim().replace(/[/\\:*?"<>|\s,;]+/g, '_').replace(/^_+|_+$/g, '') || 'attendance';
       liveCsvBtn2.setAttribute('download', safeLiveTitle + '.csv');
     }
+    if (d.wifi_ssid !== undefined) {
+      window._currentWifiSsid = d.wifi_ssid;
+      const ssidEl = document.getElementById('notionWifiSsid');
+      if (ssidEl) ssidEl.innerText = d.wifi_ssid;
+      const sText = document.getElementById('notionSsidText');
+      if (sText) sText.innerText = d.wifi_ssid;
+
+      const sInput = document.getElementById('newWifiSsidInput');
+      if (sInput && !window._ssidInputInitialized) {
+        sInput.value = d.next_wifi_ssid || d.wifi_ssid;
+        window.onWifiSsidInput(sInput.value);
+        window._ssidInputInitialized = true;
+      }
+    }
     if (d.current_wifi_pass !== undefined) {
       window._currentWifiPass = d.current_wifi_pass;
       const passEl = document.getElementById('notionActiveWifiPass');
-      if (passEl && !isWifiPassVisible) {
-        passEl.innerText = (d.current_wifi_pass.length > 0) ? '••••••••' : '(no password)';
-      } else if (passEl && isWifiPassVisible) {
-        passEl.innerText = d.current_wifi_pass || '(no password)';
+      const eyeBtn = document.getElementById('btnToggleWifiPassEye');
+      const isPassOpen = (d.current_wifi_pass.length === 0);
+      if (passEl) {
+        if (isPassOpen) {
+          passEl.innerText = '(Open - No Password)';
+          passEl.style.color = 'var(--md-sys-color-warning)';
+          if (eyeBtn) eyeBtn.style.display = 'none';
+        } else {
+          passEl.style.color = '';
+          if (eyeBtn) eyeBtn.style.display = 'inline-flex';
+          if (!isWifiPassVisible) {
+            passEl.innerText = '••••••••';
+          } else {
+            passEl.innerText = d.current_wifi_pass;
+          }
+        }
+      }
+      if (!window._passInputInitialized) {
+        window._passInputInitialized = true;
+        const passInput = document.getElementById('newWifiPassInput');
+        const disableToggle = document.getElementById('disableWifiPassToggle');
+        const nextIsOpen = (d.next_wifi_open !== undefined) ? d.next_wifi_open : (d.next_wifi_pass === '');
+        if (disableToggle) {
+          disableToggle.checked = nextIsOpen;
+          window.onToggleDisableWifiPass();
+        }
+        if (passInput && !nextIsOpen) {
+          passInput.value = d.next_wifi_pass || d.current_wifi_pass || '12345678';
+          window.onWifiPassInput(passInput.value);
+        }
       }
     }
-    if (d.wifi_ssid !== undefined) {
-      const ssidEl = document.getElementById('notionWifiSsid');
-      if (ssidEl) ssidEl.innerText = d.wifi_ssid;
-    }
-    const pBanner = document.getElementById('pendingPassBanner');
-    const pText = document.getElementById('notionPendingPassText');
-    if (pBanner && pText) {
+    const pBanner = document.getElementById('pendingWifiBanner') || document.getElementById('pendingPassBanner');
+    const pInfo = document.getElementById('pendingWifiInfo') || document.getElementById('notionPendingPassText');
+    if (pBanner && pInfo) {
       if (d.wifi_pass_pending) {
         pBanner.style.display = 'flex';
-        pText.innerText = d.next_wifi_pass ? `"${d.next_wifi_pass}"` : '(open network / no pass)';
+        const nextS = d.next_wifi_ssid || d.wifi_ssid;
+        const nextP = (d.next_wifi_pass && d.next_wifi_pass.length > 0) ? `"${d.next_wifi_pass}"` : 'Open (No Password)';
+        pInfo.innerText = `SSID: "${nextS}", ${nextP}`;
       } else {
         pBanner.style.display = 'none';
       }
@@ -4737,45 +5244,8 @@ window.pollStatus = async function() {
       const isSingleRegActive = document.getElementById('notion-reg-single')?.classList.contains('active');
       const inlineStatus = document.getElementById('regStatusCard');
 
-      if (d.last_scan.type === 'CardAlreadyRegistered' && isSingleRegActive) {
-        if (inlineStatus) {
-          inlineStatus.style.display = 'block';
-          inlineStatus.style.background = 'var(--md-sys-color-surface-container-high)';
-          inlineStatus.style.color = 'var(--md-sys-color-on-surface)';
-          inlineStatus.style.border = '1px solid var(--md-sys-color-primary)';
-          inlineStatus.innerHTML = '<div style="display:flex;align-items:center;gap:8px;">' +
-            '<svg class="icon-sm" style="color:var(--md-sys-color-primary);flex-shrink:0;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>' +
-            '<div><b>Already Registered</b><br>UID <code>' + window.escapeHtml(d.last_scan.uid) + '</code> is already registered to <b>' + window.escapeHtml(d.last_scan.name) + '</b>.</div>' +
-            '</div>';
-        }
-        window.playAudioTone('success');
-      } else if (d.last_scan.type === 'CardDetected' && isSingleRegActive && inlineStatus) {
-        const enteredName = document.getElementById('regOwnerName')?.value.trim();
-        if (enteredName && (!window.isPollingReg)) {
-          window.startRegistration();
-        } else {
-          inlineStatus.style.display = 'block';
-          inlineStatus.style.background = 'var(--md-sys-color-surface-container-high)';
-          inlineStatus.style.color = 'var(--md-sys-color-on-surface)';
-          inlineStatus.style.border = '1px solid var(--md-sys-color-primary)';
-          inlineStatus.innerHTML = '<div style="display:flex;align-items:center;gap:8px;">' +
-            '<svg class="icon-sm" style="color:var(--md-sys-color-primary);flex-shrink:0;" viewBox="0 0 24 24"><path fill="currentColor" d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/></svg>' +
-            '<div><b>Tag Detected: <code>' + window.escapeHtml(d.last_scan.uid) + '</code></b><br>Enter attendee details and click <b>Tap Card to Register</b>.</div>' +
-            '</div>';
-          window.playAudioTone('success');
-        }
-      } else if (d.last_scan.type === 'CardConflict' && isSingleRegActive && inlineStatus) {
-        inlineStatus.style.display = 'block';
-        inlineStatus.style.background = 'var(--md-sys-color-error-container)';
-        inlineStatus.style.color = 'var(--md-sys-color-on-error-container)';
-        inlineStatus.style.border = '1px solid var(--md-sys-color-error)';
-        inlineStatus.innerHTML = '<div style="display:flex;align-items:center;gap:8px;">' +
-          '<svg class="icon-sm" style="color:var(--md-sys-color-error);flex-shrink:0;" viewBox="0 0 24 24"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>' +
-          '<div><b>Card Already in Use</b><br>UID <code>' + window.escapeHtml(d.last_scan.uid) + '</code> is registered to <b>' + window.escapeHtml(d.last_scan.name) + '</b>.<br>Please use another card.</div>' +
-          '</div>';
-        window.playAudioTone('alert');
-      } else if (d.last_scan.type === 'Registration') {
-        window.handleNewScan(d.last_scan);
+      if (d.last_scan.type === 'Registration') {
+        window.loadCardsDatabase();
       } else if (d.session_active && isConsoleVisible && !isSettingsOpen && !isTimeModalOpen && !isFirstBootOpen && !isHistoryOpen) {
         window.handleNewScan(d.last_scan);
       }
@@ -4823,6 +5293,14 @@ window.handleNewScan = function(scan) {
     subEl.innerText = cleanMsg || `Already checked in at ${timeStr}. (Listed as 1 entry)`;
     metaEl.innerText = `UID: ${scan.uid} \u2022 ${timeStr}`;
     window.playAudioTone('duplicate');
+  } else if (scan.type === 'Late') {
+    fullCard.className = 'rfid-panel-fullcard theme-duplicate';
+    badge.innerText = 'TIME IN (LATE)';
+    nameEl.innerText = scan.name;
+    subEl.innerText = `Recorded at ${timeStr} \u2022 Late Entrance`;
+    metaEl.innerText = `Card UID: ${scan.uid}`;
+    window.playAudioTone('alert');
+    window.loadAttendanceLog();
   } else if (scan.type === 'Entrance' || scan.type === 'Exit') {
     fullCard.className = 'rfid-panel-fullcard theme-success';
     badge.innerText = `${scan.type.toUpperCase()} RECORDED`;
@@ -4900,7 +5378,7 @@ window.addEventListener('DOMContentLoaded', () => {
   let pollTimer = null;
   function scheduleNextPoll() {
     const isModalOpen = document.getElementById('settingsModal')?.classList.contains('active');
-    const delay = isModalOpen ? 1500 : 350;
+    const delay = isModalOpen ? 1500 : 850;
     pollTimer = setTimeout(async () => {
       await window.pollStatus();
       scheduleNextPoll();
@@ -4929,6 +5407,10 @@ void handleRoot() {
 }
 
 void handleStatus() {
+  if (server.hasArg("settings_open")) {
+    isSettingsOpen = (server.arg("settings_open") == "1");
+  }
+
   String regStateStr = "idle";
   if (regState == REG_WAITING) regStateStr = "waiting";
   else if (regState == REG_SUCCESS) regStateStr = "success";
@@ -4938,11 +5420,14 @@ void handleStatus() {
   else if (regState == REG_CANCELLED) regStateStr = "cancelled";
 
   String json = "{";
+  json.reserve(1024);
   json += "\"time_set\":" + String(isTimeSet ? "true" : "false") + ",";
   json += "\"current_time\":\"" + getCurrentTimeString() + "\",";
   json += "\"session_active\":" + String(sessionActive ? "true" : "false") + ",";
   json += "\"session_type\":\"" + sessionType + "\",";
   json += "\"session_title\":\"" + escapeJson(sessionTitle) + "\",";
+  json += "\"grace_minutes\":" + String(sessionGraceMinutes) + ",";
+  json += "\"session_start\":" + String((unsigned long)sessionStartTime) + ",";
   json += "\"require_registration\":" + String(requireRegistration ? "true" : "false") + ",";
   json += "\"is_settings_open\":" + String(isSettingsOpen ? "true" : "false") + ",";
   json += "\"reg_state\":\"" + regStateStr + "\",";
@@ -4972,10 +5457,13 @@ void handleStatus() {
   json += "\"fs_free\":" + String(fsFreeBytes) + ",";
   json += "\"est_cards_free\":" + String(estCardsCap) + ",";
   json += "\"wifi_clients\":" + String(WiFi.softAPgetStationNum()) + ",";
-  json += "\"wifi_ssid\":\"" + escapeJson(String(AP_SSID)) + "\",";
+  json += "\"wifi_ssid\":\"" + escapeJson(currentApSsid) + "\",";
+  json += "\"next_wifi_ssid\":\"" + escapeJson(nextApSsid) + "\",";
   json += "\"current_wifi_pass\":\"" + escapeJson(currentApPass) + "\",";
   json += "\"next_wifi_pass\":\"" + escapeJson(nextApPass) + "\",";
-  json += "\"wifi_pass_pending\":" + String(currentApPass != nextApPass ? "true" : "false") + ",";
+  json += "\"wifi_open\":" + String(currentApPass.length() == 0 ? "true" : "false") + ",";
+  json += "\"next_wifi_open\":" + String(nextApPass.length() == 0 ? "true" : "false") + ",";
+  json += "\"wifi_pass_pending\":" + String((currentApPass != nextApPass || currentApSsid != nextApSsid) ? "true" : "false") + ",";
   json += "\"uptime_sec\":" + String(millis() / 1000) + ",";
   json += "\"lcd_timeout\":" + String(lcdStandbyTimeoutMs) + ",";
   json += "\"card_debounce\":" + String(cardDebounceMs) + ",";
@@ -5031,6 +5519,7 @@ void handleStartSession() {
   }
   if (server.hasArg("clear_previous") && server.arg("clear_previous") == "1") {
     attendanceRecords.clear();
+    activeResumedSessionId = "";
   }
   if (server.hasArg("type")) {
     String t = server.arg("type");
@@ -5043,16 +5532,23 @@ void handleStartSession() {
     st.trim();
     if (st.length() > 0) sessionTitle = st;
   }
+  sessionGraceMinutes = 0; // Default to 0 (optional / no late rule)
+  if (server.hasArg("grace_minutes")) {
+    sessionGraceMinutes = server.arg("grace_minutes").toInt();
+    if (sessionGraceMinutes < 0) sessionGraceMinutes = 0;
+  }
 
   sessionActive = true;
   sessionStartTime = time(nullptr);
-  Serial.printf("[SESSION STARTED] Title: '%s' | Mode: %s\n", sessionTitle.c_str(), sessionType.c_str());
-  server.send(200, "application/json", "{\"success\":true,\"message\":\"Session started!\",\"type\":\"" + sessionType + "\",\"title\":\"" + escapeJson(sessionTitle) + "\"}");
+  if (sessionStartTime <= 0) sessionStartTime = (time_t)(millis() / 1000);
+  Serial.printf("[SESSION STARTED] Title: '%s' | Mode: %s | Grace: %d mins\n", sessionTitle.c_str(), sessionType.c_str(), sessionGraceMinutes);
+  server.send(200, "application/json", "{\"success\":true,\"message\":\"Session started!\",\"type\":\"" + sessionType + "\",\"title\":\"" + escapeJson(sessionTitle) + "\",\"grace_minutes\":" + String(sessionGraceMinutes) + "}");
 }
 
 void handleStopSession() {
   wakeLcd();
   sessionActive = false;
+  activeResumedSessionId = "";
   Serial.println("[SESSION STOPPED]");
   server.send(200, "application/json", "{\"success\":true,\"message\":\"Session ended!\"}");
 }
@@ -5088,6 +5584,7 @@ void handleSetMode() {
 void handleClearSession() {
   wakeLcd();
   attendanceRecords.clear();
+  activeResumedSessionId = "";
   Serial.println("[SESSION ROSTER CLEARED]");
   server.send(200, "application/json", "{\"success\":true,\"message\":\"Attendance log reset!\"}");
 }
@@ -5145,46 +5642,77 @@ void handleSettings() {
   server.send(200, "application/json", "{\"success\":true,\"require_registration\":" + String(requireRegistration ? "true" : "false") + ",\"lcd_timeout\":" + String(lcdStandbyTimeoutMs) + ",\"card_debounce\":" + String(cardDebounceMs) + ",\"show_lcd_wifi\":" + String(showLcdWifiGuide ? "true" : "false") + "}");
 }
 
-void handleSetWifiPassword() {
+void handleSetWifiConfig() {
   wakeLcd();
-  if (!server.hasArg("password")) {
-    server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing password parameter.\"}");
-    return;
-  }
-  String newPass = server.arg("password");
-  newPass.trim();
+  bool hasSsidArg = server.hasArg("ssid");
+  bool hasPassArg = server.hasArg("password");
+  bool hasDisablePassArg = server.hasArg("disable_password");
 
-  // Validate: min 8 characters for WPA2 standard, or empty string for open network
-  if (newPass.length() > 0 && newPass.length() < 8) {
-    server.send(400, "application/json", "{\"success\":false,\"message\":\"Wi-Fi password must be at least 8 characters for WPA2 (or leave empty for an open network).\"}");
+  String newSsid = hasSsidArg ? server.arg("ssid") : nextApSsid;
+  newSsid.trim();
+  if (newSsid.length() == 0) {
+    server.send(400, "application/json", "{\"success\":false,\"message\":\"Wi-Fi Network Name (SSID) cannot be empty.\"}");
     return;
   }
-  if (newPass.length() > 63) {
-    server.send(400, "application/json", "{\"success\":false,\"message\":\"Wi-Fi password cannot exceed 63 characters.\"}");
+  if (newSsid.length() > 32) {
+    server.send(400, "application/json", "{\"success\":false,\"message\":\"Wi-Fi Network Name (SSID) cannot exceed 32 characters.\"}");
     return;
   }
 
-  // Update in-memory next password
-  nextApPass = newPass;
+  bool disablePass = false;
+  if (hasDisablePassArg) {
+    String dVal = server.arg("disable_password");
+    dVal.trim();
+    if (dVal == "1" || dVal.equalsIgnoreCase("true")) disablePass = true;
+  }
 
-  // MANDATORY: Automatically enable LCD display of Wi-Fi guide
+  String newPass = "";
+  if (!disablePass) {
+    if (hasPassArg) {
+      newPass = server.arg("password");
+      newPass.trim();
+    } else {
+      newPass = nextApPass;
+    }
+
+    if (newPass.length() == 0) {
+      // If blank and disable_password was not checked, default to initial password "12345678"
+      newPass = "12345678";
+    } else if (newPass.length() != 8) {
+      server.send(400, "application/json", "{\"success\":false,\"message\":\"Wi-Fi password must be EXACTLY 8 characters (max and minimum), or check 'Disable Wi-Fi Password' for an open network.\"}");
+      return;
+    }
+  }
+
+  nextApSsid = newSsid;
+  nextApPass = disablePass ? "" : newPass;
+
+  // Automatically enable LCD display of Wi-Fi guide
   showLcdWifiGuide = true;
 
   // Persist to NVS
   saveSystemSettings();
 
-  Serial.printf("[WIFI] New password queued for next boot: '%s'. LCD guide MANDATORY ENABLED.\n", nextApPass.c_str());
+  Serial.printf("[WIFI] Configuration queued for next boot: SSID: '%s' | Pass: '%s' (Open: %s)\n",
+                nextApSsid.c_str(), nextApPass.length() > 0 ? nextApPass.c_str() : "<Open>", disablePass ? "YES" : "NO");
 
   String json = "{";
   json += "\"success\":true,";
+  json += "\"ssid\":\"" + escapeJson(nextApSsid) + "\",";
+  json += "\"current_ssid\":\"" + escapeJson(currentApSsid) + "\",";
   json += "\"current_pass\":\"" + escapeJson(currentApPass) + "\",";
   json += "\"next_pass\":\"" + escapeJson(nextApPass) + "\",";
+  json += "\"is_open\":" + String(disablePass ? "true" : "false") + ",";
   json += "\"show_lcd_wifi\":true,";
-  json += "\"is_pending\":" + String(currentApPass != nextApPass ? "true" : "false") + ",";
-  json += "\"message\":\"Wi-Fi password saved! It will take effect on next boot. LCD password display has been automatically enabled.\"";
+  json += "\"is_pending\":" + String((currentApPass != nextApPass || currentApSsid != nextApSsid) ? "true" : "false") + ",";
+  json += "\"message\":\"Wi-Fi settings saved! Changes will take effect on next boot. 16x2 LCD display will show updated credentials.\"";
   json += "}";
 
   server.send(200, "application/json", json);
+}
+
+void handleSetWifiPassword() {
+  handleSetWifiConfig();
 }
 
 void handleLcdSleep() {
@@ -5494,7 +6022,8 @@ void handleGetAttendance() {
     json += "\"name\":\"" + escapeJson(attendanceRecords[i].name) + "\",";
     json += "\"student_id\":\"" + escapeJson(attendanceRecords[i].studentId) + "\",";
     json += "\"time_in\":\"" + escapeJson(attendanceRecords[i].inTime) + "\",";
-    json += "\"time_out\":\"" + escapeJson(attendanceRecords[i].outTime) + "\"";
+    json += "\"time_out\":\"" + escapeJson(attendanceRecords[i].outTime) + "\",";
+    json += "\"status\":\"" + escapeJson(attendanceRecords[i].status) + "\"";
     json += "}";
   }
   json += "]";
@@ -5536,9 +6065,10 @@ void handleGetHistorySession() {
     return;
   }
   String id = server.arg("id");
+  id.trim();
   SavedSessionItem* targetItem = nullptr;
   for (auto& item : sessionHistory) {
-    if (item.id == id) {
+    if (item.id == id || item.id.equalsIgnoreCase(id)) {
       targetItem = &item;
       break;
     }
@@ -5549,6 +6079,7 @@ void handleGetHistorySession() {
   }
 
   String json = "{";
+  json.reserve(2048);
   json += "\"success\":true,";
   json += "\"id\":\"" + escapeJson(targetItem->id) + "\",";
   json += "\"title\":\"" + escapeJson(targetItem->title) + "\",";
@@ -5556,41 +6087,91 @@ void handleGetHistorySession() {
   json += "\"date\":\"" + escapeJson(targetItem->dateStr) + "\",";
   json += "\"save_time\":\"" + escapeJson(targetItem->saveTime) + "\",";
   json += "\"attendee_count\":" + String(targetItem->attendeeCount) + ",";
+  json += "\"grace_minutes\":" + String(targetItem->graceMinutes) + ",";
   json += "\"records\":[";
 
-  String path = "/" + id + ".txt";
-  if (LittleFS.exists(path.c_str())) {
-    File f = LittleFS.open(path.c_str(), "r");
-    bool first = true;
+  // Robust path lookup with all 4 fallbacks
+  String cleanId = targetItem->id;
+  if (cleanId.startsWith("/")) cleanId = cleanId.substring(1);
+  String p1 = "/" + cleanId + ".txt";
+  String p2 = cleanId + ".txt";
+  String p3 = "/" + id + ".txt";
+  String p4 = id + ".txt";
+
+  File f;
+  if (LittleFS.exists(p1.c_str())) f = LittleFS.open(p1.c_str(), "r");
+  else if (LittleFS.exists(p2.c_str())) f = LittleFS.open(p2.c_str(), "r");
+  else if (LittleFS.exists(p3.c_str())) f = LittleFS.open(p3.c_str(), "r");
+  else if (LittleFS.exists(p4.c_str())) f = LittleFS.open(p4.c_str(), "r");
+
+  bool first = true;
+  int recordCount = 0;
+
+  if (f) {
     while (f.available()) {
       String line = f.readStringUntil('\n');
       line.trim();
       if (line.length() == 0) continue;
-      int t1 = line.indexOf('\t');
-      int t2 = line.indexOf('\t', t1 + 1);
-      int t3 = line.indexOf('\t', t2 + 1);
-      int t4 = line.indexOf('\t', t3 + 1);
-      int t5 = line.indexOf('\t', t4 + 1);
-      if (t1 != -1 && t2 != -1 && t3 != -1 && t4 != -1) {
+
+      char delim = '\t';
+      if (line.indexOf('\t') == -1 && line.indexOf(',') != -1) delim = ',';
+      int t1 = line.indexOf(delim);
+      int t2 = line.indexOf(delim, t1 + 1);
+      int t3 = line.indexOf(delim, t2 + 1);
+      int t4 = line.indexOf(delim, t3 + 1);
+      int t5 = line.indexOf(delim, t4 + 1);
+
+      if (t1 != -1) {
+        String name = line.substring(0, t1);
+        String sId = (t2 != -1) ? line.substring(t1 + 1, t2) : "";
+        String uid = (t2 != -1 && t3 != -1) ? line.substring(t2 + 1, t3) : ((t2 != -1) ? line.substring(t2 + 1) : "");
+        String inTime = (t3 != -1 && t4 != -1) ? line.substring(t3 + 1, t4) : ((t3 != -1) ? line.substring(t3 + 1) : "--");
+        String outTime = (t4 != -1 && t5 != -1) ? line.substring(t4 + 1, t5) : ((t4 != -1) ? line.substring(t4 + 1) : "--");
+        String status = (t5 != -1) ? line.substring(t5 + 1) : "Checked In";
+
+        name.trim(); sId.trim(); uid.trim(); inTime.trim(); outTime.trim(); status.trim();
+
         if (!first) json += ",";
         first = false;
         json += "{";
-        json += "\"name\":\"" + escapeJson(line.substring(0, t1)) + "\",";
-        json += "\"student_id\":\"" + escapeJson(line.substring(t1 + 1, t2)) + "\",";
-        json += "\"uid\":\"" + escapeJson(line.substring(t2 + 1, t3)) + "\",";
-        json += "\"time_in\":\"" + escapeJson(line.substring(t3 + 1, t4)) + "\",";
-        if (t5 != -1) {
-          json += "\"time_out\":\"" + escapeJson(line.substring(t4 + 1, t5)) + "\",";
-          json += "\"status\":\"" + escapeJson(line.substring(t5 + 1)) + "\"";
-        } else {
-          json += "\"time_out\":\"" + escapeJson(line.substring(t4 + 1)) + "\",";
-          json += "\"status\":\"Checked In\"";
-        }
+        json += "\"name\":\"" + escapeJson(name) + "\",";
+        json += "\"student_id\":\"" + escapeJson(sId) + "\",";
+        json += "\"uid\":\"" + escapeJson(uid) + "\",";
+        json += "\"time_in\":\"" + escapeJson(inTime) + "\",";
+        json += "\"time_out\":\"" + escapeJson(outTime) + "\",";
+        json += "\"status\":\"" + escapeJson(status) + "\"";
         json += "}";
+        recordCount++;
       }
     }
     f.close();
   }
+
+  // In-memory fallback if flash file was empty or missing but RAM holds the records for this session
+  if (recordCount == 0 && targetItem->attendeeCount > 0) {
+    if (targetItem->id == lastSavedSessionId || targetItem->id == activeResumedSessionId || (attendanceRecords.size() == (size_t)targetItem->attendeeCount)) {
+      for (const auto& r : attendanceRecords) {
+        String status = r.status.length() > 0 ? r.status : "Checked In";
+        if (status == "Checked In") {
+          if (r.inTime.length() > 0 && r.inTime != "--" && r.outTime.length() > 0 && r.outTime != "--") status = "Completed";
+          else if (r.outTime.length() > 0 && r.outTime != "--") status = "Checked Out";
+        }
+
+        if (!first) json += ",";
+        first = false;
+        json += "{";
+        json += "\"name\":\"" + escapeJson(r.name) + "\",";
+        json += "\"student_id\":\"" + escapeJson(r.studentId) + "\",";
+        json += "\"uid\":\"" + escapeJson(r.uid) + "\",";
+        json += "\"time_in\":\"" + escapeJson(r.inTime) + "\",";
+        json += "\"time_out\":\"" + escapeJson(r.outTime) + "\",";
+        json += "\"status\":\"" + escapeJson(status) + "\"";
+        json += "}";
+        recordCount++;
+      }
+    }
+  }
+
   json += "]}";
   server.send(200, "application/json", json);
 }
@@ -5601,9 +6182,10 @@ void handleExportHistoryCsv() {
     return;
   }
   String id = server.arg("id");
+  id.trim();
   SavedSessionItem* targetItem = nullptr;
   for (auto& item : sessionHistory) {
-    if (item.id == id) {
+    if (item.id == id || item.id.equalsIgnoreCase(id)) {
       targetItem = &item;
       break;
     }
@@ -5611,44 +6193,79 @@ void handleExportHistoryCsv() {
 
   String sTitle = targetItem ? targetItem->title : "Session";
   String csv = "Index,Attendee Name,ID Number,Card UID,Time IN,Time OUT,Status,Session Title\r\n";
-  String path = "/" + id + ".txt";
+  csv.reserve(2048);
 
+  String path = targetItem ? ("/" + targetItem->id + ".txt") : ("/" + id + ".txt");
+  if (!LittleFS.exists(path.c_str())) path = targetItem ? (targetItem->id + ".txt") : (id + ".txt");
+  if (!LittleFS.exists(path.c_str())) path = "/" + id + ".txt";
+  if (!LittleFS.exists(path.c_str())) path = id + ".txt";
+
+  int idx = 1;
   if (LittleFS.exists(path.c_str())) {
     File f = LittleFS.open(path.c_str(), "r");
-    int idx = 1;
-    while (f.available()) {
-      String line = f.readStringUntil('\n');
-      line.trim();
-      if (line.length() == 0) continue;
-      int t1 = line.indexOf('\t');
-      int t2 = line.indexOf('\t', t1 + 1);
-      int t3 = line.indexOf('\t', t2 + 1);
-      int t4 = line.indexOf('\t', t3 + 1);
-      int t5 = line.indexOf('\t', t4 + 1);
-      if (t1 != -1 && t2 != -1 && t3 != -1 && t4 != -1) {
-        String name = line.substring(0, t1);
-        String sId = line.substring(t1 + 1, t2);
-        String uid = line.substring(t2 + 1, t3);
-        String inTime = line.substring(t3 + 1, t4);
-        String outTime = (t5 != -1) ? line.substring(t4 + 1, t5) : line.substring(t4 + 1);
-        String status = (t5 != -1) ? line.substring(t5 + 1) : "Checked In";
+    if (f) {
+      while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) continue;
+
+        char delim = '\t';
+        if (line.indexOf('\t') == -1 && line.indexOf(',') != -1) delim = ',';
+        int t1 = line.indexOf(delim);
+        int t2 = line.indexOf(delim, t1 + 1);
+        int t3 = line.indexOf(delim, t2 + 1);
+        int t4 = line.indexOf(delim, t3 + 1);
+        int t5 = line.indexOf(delim, t4 + 1);
+
+        if (t1 != -1) {
+          String name = line.substring(0, t1);
+          String sId = (t2 != -1) ? line.substring(t1 + 1, t2) : "";
+          String uid = (t2 != -1 && t3 != -1) ? line.substring(t2 + 1, t3) : ((t2 != -1) ? line.substring(t2 + 1) : "");
+          String inTime = (t3 != -1 && t4 != -1) ? line.substring(t3 + 1, t4) : ((t3 != -1) ? line.substring(t3 + 1) : "--");
+          String outTime = (t4 != -1 && t5 != -1) ? line.substring(t4 + 1, t5) : ((t4 != -1) ? line.substring(t4 + 1) : "--");
+          String status = (t5 != -1) ? line.substring(t5 + 1) : "Checked In";
+
+          name.trim(); sId.trim(); uid.trim(); inTime.trim(); outTime.trim(); status.trim();
+
+          csv += String(idx++) + ",";
+          csv += "\"" + escapeCsv(name) + "\",";
+          csv += "\"" + escapeCsv(sId) + "\",";
+          csv += "\"" + escapeCsv(uid) + "\",";
+          csv += "\"" + escapeCsv(inTime) + "\",";
+          csv += "\"" + escapeCsv(outTime) + "\",";
+          csv += "\"" + escapeCsv(status) + "\",";
+          csv += "\"" + escapeCsv(sTitle) + "\"\r\n";
+        }
+      }
+      f.close();
+    }
+  }
+
+  // In-memory fallback if file parsing yielded no records
+  if (idx == 1 && targetItem && targetItem->attendeeCount > 0) {
+    if (targetItem->id == lastSavedSessionId || (attendanceRecords.size() == (size_t)targetItem->attendeeCount)) {
+      for (const auto& r : attendanceRecords) {
+        String status = r.status.length() > 0 ? r.status : "Checked In";
+        if (status == "Checked In") {
+          if (r.inTime.length() > 0 && r.inTime != "--" && r.outTime.length() > 0 && r.outTime != "--") status = "Completed";
+          else if (r.outTime.length() > 0 && r.outTime != "--") status = "Checked Out";
+        }
 
         csv += String(idx++) + ",";
-        csv += "\"" + escapeCsv(name) + "\",";
-        csv += "\"" + escapeCsv(sId) + "\",";
-        csv += "\"" + escapeCsv(uid) + "\",";
-        csv += "\"" + escapeCsv(inTime) + "\",";
-        csv += "\"" + escapeCsv(outTime) + "\",";
+        csv += "\"" + escapeCsv(r.name) + "\",";
+        csv += "\"" + escapeCsv(r.studentId) + "\",";
+        csv += "\"" + escapeCsv(r.uid) + "\",";
+        csv += "\"" + escapeCsv(r.inTime) + "\",";
+        csv += "\"" + escapeCsv(r.outTime) + "\",";
         csv += "\"" + escapeCsv(status) + "\",";
         csv += "\"" + escapeCsv(sTitle) + "\"\r\n";
       }
     }
-    f.close();
   }
 
-  String filename = sanitizeFilename(sTitle) + ".csv";
-  server.sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
-  server.send(200, "text/csv", csv);
+  String dlName = sanitizeFilename(sTitle) + "_" + (targetItem ? targetItem->dateStr : "export") + ".csv";
+  server.sendHeader("Content-Disposition", "attachment; filename=\"" + dlName + "\"");
+  server.send(200, "text/csv; charset=utf-8", csv);
 }
 
 void handleDeleteHistorySession() {
@@ -5657,12 +6274,19 @@ void handleDeleteHistorySession() {
     return;
   }
   String id = server.arg("id");
+  id.trim();
   String path = "/" + id + ".txt";
-  if (LittleFS.exists(path.c_str())) {
-    LittleFS.remove(path.c_str());
-  }
+  if (LittleFS.exists(path.c_str())) LittleFS.remove(path.c_str());
+  path = id + ".txt";
+  if (LittleFS.exists(path.c_str())) LittleFS.remove(path.c_str());
+
   for (size_t i = 0; i < sessionHistory.size(); i++) {
-    if (sessionHistory[i].id == id) {
+    if (sessionHistory[i].id == id || sessionHistory[i].id.equalsIgnoreCase(id)) {
+      path = "/" + sessionHistory[i].id + ".txt";
+      if (LittleFS.exists(path.c_str())) LittleFS.remove(path.c_str());
+      path = sessionHistory[i].id + ".txt";
+      if (LittleFS.exists(path.c_str())) LittleFS.remove(path.c_str());
+
       sessionHistory.erase(sessionHistory.begin() + i);
       break;
     }
@@ -5694,90 +6318,148 @@ void handleResumeHistorySession() {
     return;
   }
 
-  // Restore live session state
+  // Restore live session metadata
   sessionActive = true;
   sessionStartTime = time(nullptr);
   sessionTitle = targetItem->title;
   sessionType = targetItem->type;
-  attendanceRecords.clear();
+  sessionGraceMinutes = targetItem->graceMinutes;
+  activeResumedSessionId = targetItem->id;
 
-  // Read saved attendees from session file
-  String path = "/" + targetItem->id + ".txt";
-  if (!LittleFS.exists(path.c_str())) {
-    path = targetItem->id + ".txt";
-  }
-  if (!LittleFS.exists(path.c_str())) {
-    path = "/" + id + ".txt";
-  }
+  std::vector<AttendanceRecord> restoredRecords;
 
-  if (LittleFS.exists(path.c_str())) {
-    File f = LittleFS.open(path.c_str(), "r");
-    if (f) {
-      while (f.available()) {
-        String line = f.readStringUntil('\n');
-        line.trim();
-        if (line.length() == 0) continue;
+  // 1. Try reading saved attendees from LittleFS
+  String cleanId = targetItem->id;
+  if (cleanId.startsWith("/")) cleanId = cleanId.substring(1);
+  String p1 = "/" + cleanId + ".txt";
+  String p2 = cleanId + ".txt";
+  String p3 = "/" + id + ".txt";
+  String p4 = id + ".txt";
 
-        char delim = '\t';
-        if (line.indexOf('\t') == -1 && line.indexOf(',') != -1) {
-          delim = ',';
+  File f;
+  if (LittleFS.exists(p1.c_str())) f = LittleFS.open(p1.c_str(), "r");
+  else if (LittleFS.exists(p2.c_str())) f = LittleFS.open(p2.c_str(), "r");
+  else if (LittleFS.exists(p3.c_str())) f = LittleFS.open(p3.c_str(), "r");
+  else if (LittleFS.exists(p4.c_str())) f = LittleFS.open(p4.c_str(), "r");
+
+  if (f) {
+    while (f.available()) {
+      String line = f.readStringUntil('\n');
+      line.trim();
+      if (line.length() == 0) continue;
+
+      char delim = '\t';
+      if (line.indexOf('\t') == -1 && line.indexOf(',') != -1) delim = ',';
+      int t1 = line.indexOf(delim);
+      int t2 = line.indexOf(delim, t1 + 1);
+      int t3 = line.indexOf(delim, t2 + 1);
+      int t4 = line.indexOf(delim, t3 + 1);
+      int t5 = line.indexOf(delim, t4 + 1);
+
+      if (t1 != -1) {
+        AttendanceRecord rec;
+        rec.name = line.substring(0, t1);
+        rec.studentId = (t2 != -1) ? line.substring(t1 + 1, t2) : "";
+        rec.uid = (t2 != -1 && t3 != -1) ? line.substring(t2 + 1, t3) : ((t2 != -1) ? line.substring(t2 + 1) : "");
+        rec.inTime = (t3 != -1 && t4 != -1) ? line.substring(t3 + 1, t4) : ((t3 != -1) ? line.substring(t3 + 1) : "--");
+        if (t4 != -1 && t5 != -1) {
+          rec.outTime = line.substring(t4 + 1, t5);
+          rec.status = line.substring(t5 + 1);
+        } else if (t4 != -1) {
+          rec.outTime = line.substring(t4 + 1);
+        } else {
+          rec.outTime = "--";
         }
-        int t1 = line.indexOf(delim);
-        int t2 = line.indexOf(delim, t1 + 1);
-        int t3 = line.indexOf(delim, t2 + 1);
-        int t4 = line.indexOf(delim, t3 + 1);
-        int t5 = line.indexOf(delim, t4 + 1);
+        rec.status.trim();
+        rec.name.trim();
+        rec.studentId.trim();
+        rec.uid.trim();
+        rec.inTime.trim();
+        rec.outTime.trim();
+        if (rec.inTime.length() > 0 && rec.inTime != "--") rec.inTimestamp = sessionStartTime;
+        else rec.inTimestamp = 0;
+        if (rec.outTime.length() > 0 && rec.outTime != "--") rec.outTimestamp = sessionStartTime;
+        else rec.outTimestamp = 0;
+        restoredRecords.push_back(rec);
+      }
+    }
+    f.close();
+  }
 
-        if (t1 != -1) {
-          AttendanceRecord rec;
-          rec.name = line.substring(0, t1);
-          rec.studentId = (t2 != -1) ? line.substring(t1 + 1, t2) : "";
-          rec.uid = (t2 != -1 && t3 != -1) ? line.substring(t2 + 1, t3) : ((t2 != -1) ? line.substring(t2 + 1) : "");
-          rec.inTime = (t3 != -1 && t4 != -1) ? line.substring(t3 + 1, t4) : ((t3 != -1) ? line.substring(t3 + 1) : "--");
-          if (t4 != -1 && t5 != -1) {
-            rec.outTime = line.substring(t4 + 1, t5);
-          } else if (t4 != -1) {
-            rec.outTime = line.substring(t4 + 1);
-          } else {
-            rec.outTime = "--";
-          }
-          rec.name.trim();
-          rec.studentId.trim();
-          rec.uid.trim();
-          rec.inTime.trim();
-          rec.outTime.trim();
-          if (rec.inTime.length() == 0) rec.inTime = "--";
-          if (rec.outTime.length() == 0) rec.outTime = "--";
-          rec.inTimestamp = (time_t)0;
-          rec.outTimestamp = (time_t)0;
+  // 2. Client JSON payload backup if LittleFS file was empty
+  if (restoredRecords.empty() && server.hasArg("plain")) {
+    String body = server.arg("plain");
+    int recIdx = body.indexOf("\"records\"");
+    if (recIdx != -1) {
+      int openBrk = body.indexOf('[', recIdx);
+      int closeBrk = body.lastIndexOf(']');
+      if (openBrk != -1 && closeBrk > openBrk) {
+        String recsJson = body.substring(openBrk + 1, closeBrk);
+        int pos = 0;
+        while (pos < recsJson.length()) {
+          int startObj = recsJson.indexOf('{', pos);
+          if (startObj == -1) break;
+          int endObj = recsJson.indexOf('}', startObj);
+          if (endObj == -1) break;
+          String objStr = recsJson.substring(startObj + 1, endObj);
+          pos = endObj + 1;
 
-          if (rec.name.length() > 0 || rec.uid.length() > 0) {
-            attendanceRecords.push_back(rec);
+          auto getVal = [&](const String& key) -> String {
+            int k = objStr.indexOf("\"" + key + "\"");
+            if (k == -1) return "";
+            int colon = objStr.indexOf(':', k);
+            if (colon == -1) return "";
+            int q1 = objStr.indexOf('"', colon);
+            if (q1 == -1) return "";
+            int q2 = objStr.indexOf('"', q1 + 1);
+            if (q2 == -1) return "";
+            return objStr.substring(q1 + 1, q2);
+          };
+
+          String rName = getVal("name");
+          String rUid = getVal("uid");
+          String rId = getVal("student_id");
+          String rIn = getVal("time_in");
+          String rOut = getVal("time_out");
+          if (rName.length() > 0 || rUid.length() > 0) {
+            AttendanceRecord rec;
+            rec.name = rName;
+            rec.studentId = rId;
+            rec.uid = rUid;
+            rec.inTime = (rIn.length() > 0) ? rIn : "--";
+            rec.outTime = (rOut.length() > 0) ? rOut : "--";
+            rec.inTimestamp = sessionStartTime;
+            rec.outTimestamp = (rOut.length() > 0 && rOut != "--") ? sessionStartTime : 0;
+            restoredRecords.push_back(rec);
           }
         }
       }
-      f.close();
     }
   }
 
-  if (lcdAvailable) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(centerText("SESSION RESUMED"));
-    lcd.setCursor(0, 1);
-    lcd.print(centerText(formatLcdName(sessionTitle)));
-    lcdMessageUntil = millis() + 2500;
+  // 3. Fallback to active in-memory records if still available in RAM
+  if (!restoredRecords.empty()) {
+    attendanceRecords = restoredRecords;
+    saveCurrentSessionToHistory(); // Ensure flash file is created/synced!
+  } else if (attendanceRecords.size() > 0 && (targetItem->id == lastSavedSessionId || targetItem->id == activeResumedSessionId || attendanceRecords.size() == (size_t)targetItem->attendeeCount)) {
+    Serial.printf("[SESSION RESUMED] Preserving %d live attendance records from RAM\n", (int)attendanceRecords.size());
+    saveCurrentSessionToHistory(); // Ensure flash file is created/synced!
+  } else {
+    attendanceRecords.clear();
   }
 
-  Serial.printf("[SESSION] Resumed session '%s' with %d attendees (from %s)\n",
-                sessionTitle.c_str(), (int)attendanceRecords.size(), path.c_str());
+  Serial.printf("[SESSION RESUMED] '%s' with %d attendees restored to live state (retained in history)\n",
+                sessionTitle.c_str(), (int)attendanceRecords.size());
 
-  // Return full restored session data and records in response
+  // Return full JSON with records and metadata so frontend immediately populates
   String json = "{";
+  json.reserve(attendanceRecords.size() * 128 + 256);
   json += "\"success\":true,";
+  json += "\"message\":\"Session resumed successfully!\",";
   json += "\"id\":\"" + escapeJson(targetItem->id) + "\",";
   json += "\"title\":\"" + escapeJson(sessionTitle) + "\",";
   json += "\"type\":\"" + escapeJson(sessionType) + "\",";
+  json += "\"grace_minutes\":" + String(sessionGraceMinutes) + ",";
   json += "\"attendee_count\":" + String(attendanceRecords.size()) + ",";
   json += "\"records\":[";
   for (size_t i = 0; i < attendanceRecords.size(); i++) {
@@ -5788,12 +6470,11 @@ void handleResumeHistorySession() {
     json += "\"name\":\"" + escapeJson(attendanceRecords[i].name) + "\",";
     json += "\"student_id\":\"" + escapeJson(attendanceRecords[i].studentId) + "\",";
     json += "\"time_in\":\"" + escapeJson(attendanceRecords[i].inTime) + "\",";
-    json += "\"time_out\":\"" + escapeJson(attendanceRecords[i].outTime) + "\"";
+    json += "\"time_out\":\"" + escapeJson(attendanceRecords[i].outTime) + "\",";
+    json += "\"status\":\"" + escapeJson(attendanceRecords[i].status) + "\"";
     json += "}";
   }
-  json += "],";
-  json += "\"message\":\"Session resumed with " + String(attendanceRecords.size()) + " attendees.\"}";
-
+  json += "]}";
   server.send(200, "application/json", json);
 }
 
@@ -5801,18 +6482,24 @@ void handleClearAllHistory() {
   for (const auto& item : sessionHistory) {
     String path = "/" + item.id + ".txt";
     if (LittleFS.exists(path.c_str())) LittleFS.remove(path.c_str());
+    path = item.id + ".txt";
+    if (LittleFS.exists(path.c_str())) LittleFS.remove(path.c_str());
   }
   sessionHistory.clear();
   if (LittleFS.exists("/history_idx.txt")) LittleFS.remove("/history_idx.txt");
+  if (LittleFS.exists("history_idx.txt")) LittleFS.remove("history_idx.txt");
   server.send(200, "application/json", "{\"success\":true,\"message\":\"All session history cleared.\"}");
 }
 
 void handleExportCsv() {
   String csv = "Index,Attendee Name,ID Number,Card UID,Time IN,Time OUT,Status,Session Title\r\n";
+  csv.reserve(attendanceRecords.size() * 128 + 128);
   for (size_t i = 0; i < attendanceRecords.size(); i++) {
     const auto& r = attendanceRecords[i];
     String status = "Checked In";
-    if (r.inTime.length() > 0 && r.inTime != "--" && r.outTime.length() > 0 && r.outTime != "--") {
+    if (r.status.length() > 0) {
+      status = r.status;
+    } else if (r.inTime.length() > 0 && r.inTime != "--" && r.outTime.length() > 0 && r.outTime != "--") {
       status = "Completed";
     } else if (r.outTime.length() > 0 && r.outTime != "--") {
       status = "Checked Out";
@@ -6027,12 +6714,12 @@ void setup() {
   // Configure Wi-Fi Access Point (supports up to 8 stations)
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(AP_IP, AP_IP, AP_NETMASK);
-  if (currentApPass.length() >= 8) {
-    WiFi.softAP(AP_SSID, currentApPass.c_str(), 1, 0, 8);
+  if (currentApPass.length() == 8) {
+    WiFi.softAP(currentApSsid.c_str(), currentApPass.c_str(), 1, 0, 8);
   } else {
-    WiFi.softAP(AP_SSID, "", 1, 0, 8); // Open network if pass < 8 chars
+    WiFi.softAP(currentApSsid.c_str(), nullptr, 1, 0, 8); // Genuine Open network if password disabled/empty
   }
-  Serial.printf("[WIFI] Hotspot Started: SSID: '%s' | Active Password: '%s'\n", AP_SSID, (currentApPass.length() >= 8 ? currentApPass.c_str() : "<Open>"));
+  Serial.printf("[WIFI] Hotspot Started: SSID: '%s' | Active Password: '%s'\n", currentApSsid.c_str(), (currentApPass.length() == 8 ? currentApPass.c_str() : "<Open / No Password>"));
   Serial.println("[WIFI] IP Address: http://192.168.4.1");
 
   // Captive Portal DNS Server
@@ -6060,7 +6747,9 @@ void setup() {
   server.on("/api/history/clear", HTTP_POST, handleClearAllHistory);
   server.on("/api/settings", HTTP_POST, handleSettings);
   server.on("/api/settings/state", HTTP_POST, handleSettingsState);
-  server.on("/api/wifi/password", HTTP_POST, handleSetWifiPassword);
+  server.on("/api/wifi/password", HTTP_POST, handleSetWifiConfig);
+  server.on("/api/wifi/config", HTTP_POST, handleSetWifiConfig);
+  server.on("/api/wifi/config", HTTP_GET, handleSetWifiConfig);
   server.on("/api/attendance", HTTP_GET, handleGetAttendance);
   server.on("/api/attendance/export.csv", HTTP_GET, handleExportCsv);
   server.on("/api/register/start", HTTP_POST, handleRegisterStart);
@@ -6130,59 +6819,61 @@ void loop() {
     }
   }
 
-  // 6. RFID Debounce Check
-  if (millis() - lastCardTapMillis < cardDebounceMs) {
+  // 6. RFID Hardware Polling Interval (80ms non-blocking check to keep SPI bus stable)
+  static unsigned long lastPhysicalScanAttempt = 0;
+  if (millis() - lastPhysicalScanAttempt < 80) {
     return;
   }
+  lastPhysicalScanAttempt = millis();
 
   // 7. Check for RFID Card Tap
   if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
     return;
   }
 
-  // Any card brought to the reader awakens the LCD!
+  // Valid Card Detected! Extract UID immediately:
+  String uid = formatUID(&(rfid.uid));
+
+  // Halt card and stop crypto immediately to prime RC522 for the next read
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+
+  // Smart Per-Card Debounce Check:
+  // If the EXACT SAME card is held against the reader, suppress spamming scans.
+  // If a DIFFERENT card is tapped, process IMMEDIATELY with ZERO debounce delay!
+  static String lastProcessedCardUid = "";
+  if (uid == lastProcessedCardUid && (millis() - lastCardTapMillis < cardDebounceMs)) {
+    return;
+  }
+
+  // Register new card tap
+  lastCardTapMillis = millis();
+  lastProcessedCardUid = uid;
   wakeLcd();
 
   // ---------------------------------------------------------------------------
   // SMART RFID SCANNING GUARD:
   // Attendance is strictly recorded ONLY when session is ACTIVE and NOT in settings.
-  // Card registration is allowed whenever in REG_WAITING or on a registration tab!
+  // Card registration is allowed ONLY when actively waiting for a card tap (regState == REG_WAITING)!
   // ---------------------------------------------------------------------------
   bool canScanAttendance = sessionActive && !isSettingsOpen;
-  bool canScanRegistration = (regState == REG_WAITING) || isRegistrationTab;
+  bool canScanRegistration = (regState == REG_WAITING);
 
   if (!canScanAttendance && !canScanRegistration) {
-    rfid.PICC_HaltA();
-    rfid.PCD_StopCrypto1();
     return;
   }
 
-  // Valid Card Detected for Registration or Active Attendance!
-  lastCardTapMillis = millis();
-  String uid = formatUID(&(rfid.uid));
   blinkLed(300);
-
-  // Halt card and stop crypto immediately
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
-
   Serial.printf("[RFID TAP] UID: %s\n", uid.c_str());
 
   // ---------------------------------------------------------------------------
   // CASE A: System is in CARD REGISTRATION MODE (Strict 1 Card = 1 Person)
   // ---------------------------------------------------------------------------
   if (regState == REG_WAITING) {
-    bool alreadyRegistered = false;
-    String existingOwner = "";
-    String existingId = "";
-    for (const auto& c : registeredCards) {
-      if (c.uid.equalsIgnoreCase(uid)) {
-        alreadyRegistered = true;
-        existingOwner = c.name;
-        existingId = c.studentId;
-        break;
-      }
-    }
+    const RegisteredCard* existingCard = findRegisteredCard(uid);
+    bool alreadyRegistered = (existingCard != nullptr);
+    String existingOwner = existingCard ? existingCard->name : "";
+    String existingId = existingCard ? existingCard->studentId : "";
 
     if (alreadyRegistered) {
       bool isSame = isSameCandidate(existingOwner, existingId, regCandidateName, regCandidateId);
@@ -6260,84 +6951,16 @@ void loop() {
   }
 
   // ---------------------------------------------------------------------------
-  // CASE A.2: Card tapped while on Registration Tab (Direct / Pre-Arm Tag Tap)
-  // ---------------------------------------------------------------------------
-  if (isRegistrationTab) {
-    bool alreadyRegistered = false;
-    String existingOwner = "";
-    String existingId = "";
-    for (const auto& c : registeredCards) {
-      if (c.uid.equalsIgnoreCase(uid)) {
-        alreadyRegistered = true;
-        existingOwner = c.name;
-        existingId = c.studentId;
-        break;
-      }
-    }
-
-    if (alreadyRegistered) {
-      bool isSame = (regCandidateName.length() > 0) &&
-                    isSameCandidate(existingOwner, existingId, regCandidateName, regCandidateId);
-
-      lastScan.uid = uid;
-      lastScan.name = existingOwner;
-      lastScan.timeStr = getCurrentTime12h();
-      lastScan.type = isSame ? "CardAlreadyRegistered" : "CardConflict";
-      lastScan.isDuplicate = true;
-      lastScan.isRegistered = true;
-      lastScan.message = isSame ? ("Card is already registered to " + existingOwner)
-                                : ("Card already registered to " + existingOwner + ". Please use another card.");
-      lastScan.scanMillis = millis();
-
-      wakeLcd();
-      if (lcdAvailable) {
-        if (isSame) {
-          showLcdAlreadyRegistered(existingOwner);
-        } else {
-          showLcdCardInUse(existingOwner);
-        }
-      }
-      triggerRgbFeedback(isSame ? RGB_FEEDBACK_RECORDED : RGB_FEEDBACK_REJECTED);
-      Serial.printf("[REGISTRATION TAB TAP] UID %s detected (Owner: %s | Same Person: %s)\n",
-                    uid.c_str(), existingOwner.c_str(), isSame ? "YES" : "NO");
-      return;
-    } else {
-      // Unassigned card tapped
-      lastScan.uid = uid;
-      lastScan.name = "Unassigned Tag";
-      lastScan.timeStr = getCurrentTime12h();
-      lastScan.type = "CardDetected";
-      lastScan.isDuplicate = false;
-      lastScan.isRegistered = false;
-      lastScan.message = "Unassigned tag: " + uid;
-      lastScan.scanMillis = millis();
-
-      wakeLcd();
-      if (lcdAvailable) {
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(centerText("TAG DETECTED"));
-        lcd.setCursor(0, 1);
-        lcd.print(centerText(uid));
-        lcdMessageUntil = millis() + 2500;
-      }
-      triggerRgbFeedback(RGB_FEEDBACK_RECORDED);
-      Serial.printf("[REGISTRATION TAB TAP] Unassigned UID %s detected\n", uid.c_str());
-      return;
-    }
-  }
-
-  // ---------------------------------------------------------------------------
   // CASE B: ATTENDANCE SESSION CHECK (Safety fallback)
   // ---------------------------------------------------------------------------
   if (!sessionActive || isSettingsOpen) {
     return;
   }
 
+  // CASE C: ATTENDANCE SESSION IS ACTIVE -> VERIFY REGISTRATION (Single-Pass Lookup)
   // ---------------------------------------------------------------------------
-  // CASE C: ATTENDANCE SESSION IS ACTIVE -> VERIFY REGISTRATION
-  // ---------------------------------------------------------------------------
-  bool regStatus = isCardRegistered(uid);
+  const RegisteredCard* regCard = findRegisteredCard(uid);
+  bool regStatus = (regCard != nullptr);
   if (!regStatus && requireRegistration) {
     lastScan.uid = uid;
     lastScan.name = "Unknown Tag (" + uid + ")";
@@ -6354,8 +6977,8 @@ void loop() {
     return;
   }
 
-  String attendeeName = lookupOwnerName(uid);
-  String attendeeId = lookupOwnerId(uid);
+  String attendeeName = regCard ? regCard->name : ("Unregistered Tag (" + uid + ")");
+  String attendeeId = regCard ? regCard->studentId : "";
   String scanTime = getCurrentTime12h();
   time_t nowTs = time(nullptr);
 
@@ -6372,6 +6995,13 @@ void loop() {
   }
 
   if (sessionType == "Entrance") {
+    bool isLate = false;
+    if (sessionGraceMinutes > 0 && sessionStartTime > 0) {
+      time_t cutoff = sessionStartTime + ((time_t)sessionGraceMinutes * 60);
+      if (nowTs > cutoff) isLate = true;
+    }
+    String statusStr = isLate ? "Late" : "On Time";
+
     if (existingRec != nullptr) {
       if (existingRec->inTime.length() > 0 && existingRec->inTime != "--") {
         // Repeated Entrance Tap!
@@ -6392,16 +7022,17 @@ void loop() {
         // Had an exit record earlier, now logs entrance
         existingRec->inTime = scanTime;
         existingRec->inTimestamp = nowTs;
+        if (existingRec->status != "Late") existingRec->status = statusStr;
         lastScan.uid = uid;
         lastScan.name = existingRec->name;
         lastScan.timeStr = scanTime;
-        lastScan.type = "Entrance";
+        lastScan.type = isLate ? "Late" : "Entrance";
         lastScan.isDuplicate = false;
         lastScan.isRegistered = regStatus;
-        lastScan.message = "Recorded Entrance: " + existingRec->name + " at " + scanTime;
+        lastScan.message = isLate ? ("Recorded Late: " + existingRec->name + " at " + scanTime) : ("Recorded Entrance: " + existingRec->name + " at " + scanTime);
         lastScan.scanMillis = millis();
-        Serial.printf("[ATTENDANCE IN UPDATED] %s at %s\n", existingRec->name.c_str(), scanTime.c_str());
-        showLcdAttendance("Entrance", existingRec->name);
+        Serial.printf("[ATTENDANCE IN UPDATED] %s at %s (%s)\n", existingRec->name.c_str(), scanTime.c_str(), statusStr.c_str());
+        showLcdAttendance("Entrance", existingRec->name, isLate ? "LATE" : "");
         triggerRgbFeedback(RGB_FEEDBACK_RECORDED);
         return;
       }
@@ -6415,19 +7046,20 @@ void loop() {
       rec.outTime = "--";
       rec.inTimestamp = nowTs;
       rec.outTimestamp = 0;
+      rec.status = statusStr;
       attendanceRecords.push_back(rec);
 
       lastScan.uid = uid;
       lastScan.name = attendeeName;
       lastScan.timeStr = scanTime;
-      lastScan.type = "Entrance";
+      lastScan.type = isLate ? "Late" : "Entrance";
       lastScan.isDuplicate = false;
       lastScan.isRegistered = regStatus;
-      lastScan.message = "Recorded Entrance: " + attendeeName + " at " + scanTime;
+      lastScan.message = isLate ? ("Recorded Late: " + attendeeName + " at " + scanTime) : ("Recorded Entrance: " + attendeeName + " at " + scanTime);
       lastScan.scanMillis = millis();
-      Serial.printf("[ATTENDANCE RECORDED] #%d (Entrance): %s [%s] at %s\n",
-                    attendanceRecords.size(), attendeeName.c_str(), uid.c_str(), scanTime.c_str());
-      showLcdAttendance("Entrance", attendeeName);
+      Serial.printf("[ATTENDANCE RECORDED] #%d (Entrance): %s [%s] at %s (%s)\n",
+                    attendanceRecords.size(), attendeeName.c_str(), uid.c_str(), scanTime.c_str(), statusStr.c_str());
+      showLcdAttendance("Entrance", attendeeName, isLate ? "LATE" : "");
       triggerRgbFeedback(RGB_FEEDBACK_RECORDED);
       return;
     }
@@ -6453,6 +7085,7 @@ void loop() {
         // Update exit time
         existingRec->outTime = scanTime;
         existingRec->outTimestamp = nowTs;
+        if (existingRec->status != "Late") existingRec->status = "Completed";
         lastScan.uid = uid;
         lastScan.name = existingRec->name;
         lastScan.timeStr = scanTime;
@@ -6476,6 +7109,7 @@ void loop() {
       rec.outTime = scanTime;
       rec.inTimestamp = 0;
       rec.outTimestamp = nowTs;
+      rec.status = "Checked Out";
       attendanceRecords.push_back(rec);
 
       lastScan.uid = uid;

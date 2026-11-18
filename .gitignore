@@ -14,6 +14,8 @@ __pycache__/
 *.pyo
 *.pyd
 check_*.py
+generate_kicad_project.py
+tools/*.py
 
 # Scratch & Temporary Files
 scratch/
@@ -35,9 +37,19 @@ final render/
 # Proposals, Presentation Documents & Old Assets
 proposal_one_pager*
 *.docx
-*.pdf
 render_hero_thumb.png
 terminal_render.jpg
+
+# KiCad Temporary Verification Crops & Previews
+Hardware_KiCad/crop_*.png
+Hardware_KiCad/verify_*.png
+Hardware_KiCad/full_preview_*.png
+Hardware_KiCad/power_section_verified.png
+Hardware_KiCad/*_v1.1.*
+Hardware_KiCad/*_v1.2.*
+Hardware_KiCad/*.kicad_prl
+Hardware_KiCad/ESP32_Attendance_System_Schematic.pdf
+Hardware_KiCad/ESP32_Attendance_System_Schematic.png
 
 # Subfolder Backup Clone
 ESP32-RFID-Attendance-System/
